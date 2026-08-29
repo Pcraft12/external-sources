@@ -187,7 +187,7 @@
 local VERSION = "1.0.4" -- upstream line: 1.0.3 → 1.0.4 (dev builds 1.1.0–1.2.2 superseded)
 id       = "novel543"
 name     = "Novel543 Full"
-version  = VERSION
+version  = "1.0.4"
 baseUrl  = "https://www.novel543.com/"
 language = "zh"
 icon     = "https://raw.githubusercontent.com/HnDK0/external-sources/main/icons/novel543.png"
