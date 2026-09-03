@@ -1,6 +1,90 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 -- WTR-LAB source plugin for NoveLA
--- Version 1.1.7 (2026-08-26)
+-- Version 1.1.9 (2026-09-03)
+--
+-- 1.1.9 (2026-09-03) — hotfix: catalog latency + tag visibility.
+--
+--   CATALOG LATENCY (the "10-15 s to load the homepage" fix):
+--   • Root cause 1: the site's /_next/data/*.json routes now STALL
+--     intermittently (observed 7-25 s per request, then 0.4 s minutes
+--     later — server-side congestion/rate-shaping that affects the
+--     app too). The HTML routes (/en/novel-list, /en/novel-finder)
+--     render consistently fast (~0.5-1 s) and carry the EXACT SAME
+--     pageProps (series, count, tags) inside __NEXT_DATA__.
+--   • Root cause 2: every site redeploy changes the Next.js buildId,
+--     so the persisted id goes stale → a 404 probe (itself up to 25 s
+--     when the JSON routes are stalled) + a 262 KB HTML refresh + a
+--     fresh JSON fetch — three round-trips before the first item.
+--   • Fix: catalog/search/filtered now fetch the HTML route FIRST and
+--     parse pageProps out of __NEXT_DATA__ — ONE request, no buildId,
+--     no 404 probe. The _next/data JSON route is kept as automatic
+--     fallback (with the buildId machinery) if the HTML route fails.
+--   • Verified live: HTML route answers pagination (?page=2) and every
+--     finder parameter (text=, ti=/te=/tc=, gi=/ge=/gc=, count_type=,
+--     minr=, minrc=, status=, addition_age=, orderBy=) with the same
+--     series/count values as the JSON route.
+--
+--   TAGS NOW SHOW UP (the site-like tag picker):
+--   • 11 new "Tags: <category>" pickers (one per site category, 27-190
+--     tags each, alphabetized by the app) — the tag list is VISIBLE
+--     again after 1.1.8's keyword-only fields, but as compact dropdown
+--     rows instead of the old 882-chip wall. Pick a tag to include it.
+--   • Tag Search keyword fields got site-autocomplete-like feedback:
+--     typing a short keyword (e.g. "sys") that matches SEVERAL tags no
+--     longer silently ANDs them all (which returned ~0 novels) — it
+--     now raises an error LISTING the matching tag names ("sys →
+--     System, System Misunderstanding") so you can type the exact
+--     name or add "*" to include every match at once.
+--     Resolution order per keyword: exact label match → tag id →
+--     single substring match → ambiguous (error with the list) /
+--     "keyword*" wildcard (all substring matches).
+--   • Tags picked in the dropdowns AND keywords both merge into the
+--     same ti=/te= request (deduplicated).
+--
+-- 1.1.8 (2026-09-03) — maintenance release: performance + tag-filter UX.
+--
+--   Tag filters: search bar instead of the 882-chip wall (THE fix):
+--   • The 11 category-grouped tristate pickers (882 eagerly-built chips)
+--     are GONE. Finding one tag in a wall of ~900 chips was impractical
+--     and made the filter sheet itself slow to open and scroll.
+--   • Replaced by a compact "Tag Search" section:
+--       – Tag Search (include) / (exclude): free-text keyword fields.
+--         Comma-separate multiple keywords; multi-word phrases match as
+--         phrases (e.g. "weak to strong"); numeric tag ids also accepted.
+--       – Tag Search Category: one picker with "All categories" + the 11
+--         site categories — scopes BOTH keyword fields to that category,
+--         mirroring how the site's finder groups its tag list.
+--       – Tag (And/Or) picker kept for the resolved set.
+--     Keyword resolution happens at apply time; a keyword that matches
+--     no tag raises a clear error instead of silently filtering nothing.
+--   • Tag index refreshed from the live site: 882 → 888 tags (new:
+--     Blue Archive, Food Wars!, Honkai Star Rails, Monster Hunter,
+--     Dragon Raja, System Misunderstanding).
+--
+--   Novel finder inside the filters (search + filters in one place):
+--   • New "Title Search" text filter — the app's global search bar has
+--     no filter UI, so this puts the site's novel-finder text box into
+--     the filter sheet: type a title keyword + combine with genres,
+--     tags, status, chapter-count and every other finder filter, all in
+--     one applied query (the finder JSON API's text= parameter).
+--
+--   Performance (chapter load "sometimes ~10 s" fix):
+--   • Turnstile backoff cut 2500/5000 ms → 600/1800 ms: the app-level
+--     counter only resets via a solved challenge, so long sleeps never
+--     helped recovery — they only added up to 7.5 s of dead wait to a
+--     3-attempt chain (the "10 seconds" symptom). Fast retries still
+--     benefit from the per-instance intermittent enforcement.
+--   • Glossary negative caching: books WITHOUT a v2 glossary were
+--     re-fetched on EVERY chapter (the old code only cached when terms
+--     existed). Now an empty glossary is cached once per book.
+--   • Chapter-list/update hash via api/chapters (74 KB JSON) instead of
+--     the full book page (250 KB HTML): library update checks are ~3x
+--     lighter, and getChapterList + getChapterListHash share one
+--     45-second cache, so opening a book fetches the chapter list once.
+--   • buildId persisted via set_preference: the first catalog browse
+--     after every app restart no longer downloads the 240 KB
+--     novel-finder HTML just to extract the build id (a stale persisted
+--     id still self-heals — fetchNextData refreshes it once on 404).
 --
 -- 1.1.7 (2026-08-26) — comprehensive upgrade on top of upstream 1.1.6.
 --   Fixes two long-standing root causes of bad reader UX and adds full
@@ -94,20 +178,36 @@
 -- ── Metadata ───────────────────────────────────────────────────────────────
 id = "wtrlab"
 name = "WTR-LAB"
-version = "1.1.7"
+version = "1.1.9"
 baseUrl = "https://wtr-lab.com/"
 language = "MTL"
 icon = "https://raw.githubusercontent.com/HnDK0/external-sources/main/icons/wtr-lab.png"
-description = "Machine-translated novels (wtr-lab.com). AI and raw (web) translation modes, full novel-finder filters. If a 'Security Check' error appears, open any chapter of the book in the integrated browser, complete the verification, then retry."
+description = "Machine-translated novels (wtr-lab.com). AI and raw (web) translation modes. Novel-finder filters with visible tag pickers, keyword tag search and title search. If a 'Security Check' error appears, open any chapter of the book in the integrated browser, complete the verification, then retry."
 
 -- ── Settings keys ──────────────────────────────────────────────────────────
 local PREF_MODE = "wtrlab_mode"           -- "ai" | "raw"  (key kept from 1.x so existing settings survive)
 local PREF_DELAY = "wtrlab_chapter_delay" -- ms pause before each chapter fetch
+local PREF_BUILDID = "wtrlab_buildid"     -- persisted Next.js buildId (survives app restarts)
 
 -- ── Caches (live until app restart) ────────────────────────────────────────
 local termCache = {}    -- [novelId] = { termByOriginal }
 local _pageCache = {}   -- book page HTML
 local _buildIdCache = nil
+local _chaptersCache = {} -- [novelId] = { t = fetchedAtMs, chapters = {...} }
+
+-- Millisecond clock with defensive fallbacks (os_time returns MILLISECONDS
+-- in NoveLA; some builds lack it entirely — a probe counter still enables
+-- short-TTL cache dedup without a clock).
+local _clockFallback = 0
+local function nowMs()
+    local ok, v = pcall(function() return os_time() end)
+    if ok and type(v) == "number" and v > 0 then
+        if v < 100000000000 then v = v * 1000 end -- seconds → ms heuristic
+        return v
+    end
+    _clockFallback = _clockFallback + 1
+    return _clockFallback
+end
 
 local function getMode()
     local v = get_preference(PREF_MODE)
@@ -523,17 +623,28 @@ end
 -- Next.js data API (catalog / search / filters)
 -- ═══════════════════════════════════════════════════════════════════════════
 
-local function getBuildId()
-    if _buildIdCache then
+local function getBuildId(force)
+    if _buildIdCache and not force then
         return _buildIdCache
     end
+    -- 1) Persisted buildId (survives app restarts). Validated lazily:
+    --    if the site redeployed, fetchNextData's stale-retry refreshes it.
+    if not force then
+        local saved = get_preference(PREF_BUILDID)
+        if saved ~= nil and saved ~= "" then
+            _buildIdCache = saved
+            return saved
+        end
+    end
+    -- 2) Fetch a page that carries __NEXT_DATA__ and read the build id.
     local fr = http_get(baseUrl .. "en/novel-finder")
     if not fr.success then
-        return nil
+        return _buildIdCache
     end
     local buildId = string.match(fr.body, '"buildId":"([^"]+)"')
     if buildId then
         _buildIdCache = buildId
+        pcall(function() set_preference(PREF_BUILDID, buildId) end)
     end
     return buildId
 end
@@ -542,7 +653,9 @@ end
 -- Returns pageProps table or nil.
 local function fetchNextData(pathPattern, params)
     for attempt = 1, 2 do
-        local buildId = getBuildId()
+        -- attempt 2 forces an HTML refresh (bypasses the possibly-stale
+        -- persisted buildId instead of returning it again)
+        local buildId = getBuildId(attempt == 2)
         if not buildId then
             return nil
         end
@@ -551,6 +664,9 @@ local function fetchNextData(pathPattern, params)
         if r.success then
             local data = json_parse(r.body)
             if data and data.pageProps then
+                -- Confirmed working: keep it cached and persisted
+                if _buildIdCache ~= buildId then _buildIdCache = buildId end
+                pcall(function() set_preference(PREF_BUILDID, buildId) end)
                 return data.pageProps
             end
         end
@@ -561,6 +677,55 @@ local function fetchNextData(pathPattern, params)
         end
     end
     return nil
+end
+
+-- ── HTML-first pageProps fetch (v1.1.9) ─────────────────────────────────────
+-- The site's _next/data/*.json routes intermittently STALL server-side
+-- (observed 7-25 s per request, recovering to ~0.4 s minutes later),
+-- while the HTML routes render consistently fast and embed the EXACT
+-- SAME pageProps (series / count / tags) in __NEXT_DATA__. Fetching the
+-- HTML route removes the buildId dependency (and its stale-404 probe)
+-- from the hot path entirely: the first catalog page costs ONE request.
+local function extractNextDataProps(html)
+    if not html then return nil end
+    local json = string.match(html, '<script%s+id="__NEXT_DATA__"[^>]*>(.-)</script>')
+    if not json or json == "" then return nil end
+    local ok, data = pcall(json_parse, json)
+    if ok and type(data) == "table" then
+        -- HTML pages embed the props in the standard Next.js __NEXT_DATA__
+        -- shape: {"props":{"pageProps":{...}},"buildId":...}; the _next/data
+        -- JSON routes return {"pageProps":{...}} at the TOP level. Both carry
+        -- the exact same pageProps (series / count / tags) — accept either.
+        local pp = data.pageProps
+        if type(pp) ~= "table" and type(data.props) == "table" then
+            pp = data.props.pageProps
+        end
+        if type(pp) == "table" then
+            return pp
+        end
+    end
+    return nil
+end
+
+local function fetchPagePropsHTML(route, params)
+    local url = baseUrl .. route .. (params and ("?" .. params) or "")
+    local r = http_get(url)
+    if not r.success then
+        return nil
+    end
+    return extractNextDataProps(r.body)
+end
+
+-- Catalog page fetch: HTML route first (fast, buildId-free), _next/data
+-- JSON route as fallback. route = "en/novel-list" | "en/novel-finder";
+-- jsonPath = "/en/novel-list.json" | "/en/novel-finder.json".
+local function fetchCatalogPage(route, jsonPath, params)
+    local pp = fetchPagePropsHTML(route, params)
+    if pp and pp.series then
+        return pp
+    end
+    log_info("wtrlab: HTML route failed, falling back to _next/data JSON")
+    return fetchNextData(jsonPath, params)
 end
 
 local function seriesToItems(series)
@@ -619,935 +784,1059 @@ local function pagePropsToResult(pp, page)
 end
 
 
--- ── Tag search index & resolver ─────────────────────────────────────
--- Auto-generated by scripts/gen_tag_search_index.py from
--- research/real_tags.json (882 tags). Do not hand-edit; re-run
--- the generator after refreshing real_tags.json.
+-- ── Tag search index & resolver (v2) ─────────────────────────────────────
+-- Auto-generated by scripts/gen_tag_search_index_v2.py from the live
+-- /en/novel-finder __NEXT_DATA__ snapshot (research/tags_live_v2.json;
+-- 888 tags as of 2026-09-03). Do not hand-edit; re-run the generator
+-- after refreshing the snapshot.
 --
--- Format: one "id|Label" pair per line. Parsed once at plugin
--- load into ALL_TAGS (array of {id=string, label=lowercase}).
--- tagSearchResolve(text) returns a dedup'd list of ids whose
--- label contains any comma/space/newline-separated token, OR
--- whose id matches a token. Empty/whitespace-only text → empty list.
+-- Format: one "id|Label|catId" triple per line. Parsed once at plugin
+-- load into ALL_TAGS ({id, label=display case, lower=match key, cat});
+-- TAG_CATEGORIES holds the 11 site category names for the Tag Search
+-- Category picker.
+--
+-- tagSearchResolve(text, cat) → dedup'd list of tag ids matching any
+-- comma/semicolon-separated token (multi-word tokens match as phrases
+-- first, per-word as fallback; numeric tokens are ids). cat scopes
+-- matching to one category ("0"/nil = all categories).
+
+local TAG_CATEGORIES = {
+    { id = "0",  label = "All Categories" },
+    { id = "1",  label = "Protagonist Archetypes (190)" },
+    { id = "2",  label = "Power Systems (100)" },
+    { id = "3",  label = "Worldbuilding (56)" },
+    { id = "4",  label = "Socio-Political Structures (71)" },
+    { id = "5",  label = "Relationship Tropes (136)" },
+    { id = "6",  label = "Narrative (46)" },
+    { id = "7",  label = "Beings & Factions (68)" },
+    { id = "8",  label = "Professional Archetypes (64)" },
+    { id = "9",  label = "Tone & Atmosphere (27)" },
+    { id = "10", label = "Adaptations (90)" },
+    { id = "11", label = "Miscellaneous Narrative Elements (40)" },
+}
 
 local TAG_SEARCH_INDEX = [==[
-1|Abandoned Children
-2|Ability Steal
-3|Absent Parents
-4|Abusive Characters
-5|Academy
-6|Accelerated Growth
-7|Acting
-8|Adapted from Manga
-9|Adapted from Manhua
-10|Adapted to Anime
-11|Adapted to Drama
-12|Adapted to Drama CD
-13|Adapted to Game
-14|Adapted to Manga
-15|Adapted to Manhua
-16|Adapted to Manhwa
-17|Adapted to Movie
-18|Adapted to Visual Novel
-19|Adopted Children
-20|Adopted Protagonist
-21|Adultery
-22|Adventurers
-23|Affair
-24|Age Progression
-25|Age Regression
-26|Aggressive Characters
-27|Alchemy
-28|Aliens
-29|All-Girls School
-30|Alternate World
-31|Amnesia
-32|Amusement Park
-33|Anal
-34|Ancient China
-35|Ancient Times
-36|Androgynous Characters
-37|Androids
-38|Angels
-39|Animal Characteristics
-40|Animal Rearing
-41|Anti-Magic
-42|Anti-social Protagonist
-43|Antihero Protagonist
-44|Antique Shop
-45|Apartment Life
-46|Apathetic Protagonist
-47|Apocalypse
-48|Appearance Changes
-49|Appearance Different from Actual Age
-50|Archery
-51|Aristocracy
-52|Arms Dealers
-53|Army
-54|Army Building
-55|Arranged Marriage
-56|Arrogant Characters
-57|Artifact Crafting
-58|Artifacts
-59|Artificial Intelligence
-60|Artists
-61|Assassins
-62|Astrologers
-63|Autism
-64|Automatons
-65|Average-looking Protagonist
-66|Award-winning Work
-67|Awkward Protagonist
-68|Bands
-69|Based on a Movie
-70|Based on a Song
-71|Based on a TV Show
-72|Based on a Video Game
-73|Based on a Visual Novel
-74|Based on an Anime
-75|Battle Academy
-76|Battle Competition
-77|BDSM
-78|Beast Companions
-79|Beastkin
-80|Beasts
-81|Beautiful Female Lead
-82|Bestiality
-83|Betrayal
-84|Bickering Couple
-85|Biochip
-86|Bisexual Protagonist
-87|Black Belly
-88|Blackmail
-89|Blacksmith
-90|Blind Dates
-91|Blind Protagonist
-92|Blood Manipulation
-93|Bloodlines
-94|Body Swap
-95|Body Tempering
-96|Body-double
-97|Bodyguards
-98|Books
-99|Bookworm
-100|Boss-Subordinate Relationship
-101|Brainwashing
-102|Breast Fetish
-103|Broken Engagement
-104|Brother Complex
-105|Brotherhood
-106|Buddhism
-107|Bullying
-108|Business Management
-109|Businessmen
-110|Butlers
-111|Calm Protagonist
-112|Cannibalism
-113|Card Games
-114|Carefree Protagonist
-115|Caring Protagonist
-116|Cautious Protagonist
-117|Celebrities
-118|Character Growth
-119|Charismatic Protagonist
-120|Charming Protagonist
-121|Chat Rooms
-122|Cheats
-123|Chefs
-124|Child Abuse
-125|Child Protagonist
-126|Childcare
-127|Childhood Friends
-128|Childhood Love
-129|Childhood Promise
-130|Childish Protagonist
-131|Chuunibyou
-132|Clan Building
-133|Classic
-134|Clever Protagonist
-135|Clingy Lover
-136|Clones
-137|Clubs
-138|Clumsy Love Interests
-139|Co-Workers
-140|Cohabitation
-141|Cold Love Interests
-142|Cold Protagonist
-143|Collection of Short Stories
-144|College/University
-145|Coma
-146|Comedic Undertone
-147|Coming of Age
-148|Complex Family Relationships
-149|Conditional Power
-150|Confident Protagonist
-151|Confinement
-152|Conflicting Loyalties
-153|Contracts
-154|Cooking
-155|Corruption
-156|Cosmic Wars
-157|Cosplay
-158|Couple Growth
-159|Court Official
-160|Cousins
-161|Cowardly Protagonist
-162|Crafting
-163|Crime
-164|Criminals
-165|Cross-dressing
-166|Crossover
-167|Cruel Characters
-168|Cryostasis
-169|Cultivation
-170|Cunnilingus
-171|Cunning Protagonist
-172|Curious Protagonist
-173|Curses
-174|Cute Children
-175|Cute Protagonist
-176|Cute Story
-177|Dancers
-178|Dao Companion
-179|Dao Comprehension
-180|Daoism
-181|Dark
-182|Dead Protagonist
-183|Death
-184|Death of Loved Ones
-185|Debts
-186|Delinquents
-187|Delusions
-188|Demi-Humans
-189|Demon Lord
-190|Demonic Cultivation Technique
-191|Demons
-192|Dense Protagonist
-193|Depictions of Cruelty
-194|Depression
-195|Destiny
-196|Detectives
-197|Determined Protagonist
-198|Devoted Love Interests
-199|Different Social Status
-200|Disabilities
-201|Discrimination
-202|Disfigurement
-203|Dishonest Protagonist
-204|Distrustful Protagonist
-205|Divination
-206|Divine Protection
-207|Divorce
-208|Doctors
-209|Dolls/Puppets
-210|Domestic Affairs
-211|Doting Love Interests
-212|Doting Older Siblings
-213|Doting Parents
-214|Dragon Riders
-215|Dragon Slayers
-216|Dragons
-217|Dreams
-218|Drugs
-219|Druids
-220|Dungeon Master
-221|Dungeons
-222|Dwarfs
-223|Dystopia
-224|e-Sports
-225|Early Romance
-226|Earth Invasion
-227|Easy Going Life
-228|Economics
-229|Editors
-230|Eidetic Memory
-231|Elderly Protagonist
-232|Elemental Magic
-233|Elves
-234|Emotionally Weak Protagonist
-235|Empires
-236|Enemies Become Allies
-237|Enemies Become Lovers
-238|Engagement
-239|Engineer
-240|Enlightenment
-241|Episodic
-242|Eunuch
-243|European Ambience
-244|Evil Gods
-245|Evil Organizations
-246|Evil Protagonist
-247|Evil Religions
-248|Evolution
-249|Exhibitionism
-250|Exorcism
-251|Eye Powers
-252|Fairies
-253|Fallen Angels
-254|Fallen Nobility
-255|Familial Love
-256|Familiars
-257|Family
-258|Family Business
-259|Family Conflict
-260|Famous Parents
-261|Famous Protagonist
-262|Fanaticism
-264|Fantasy Creatures
-265|Fantasy World
-266|Farming
-267|Fast Cultivation
-268|Fast Learner
-269|Fat Protagonist
-270|Fat to Fit
-271|Fated Lovers
-272|Fearless Protagonist
-273|Fellatio
-274|Female Master
-275|Female Protagonist
-276|Female to Male
-277|Feng Shui
-278|Firearms
-279|First Love
-280|First-time Intercourse
-281|Flashbacks
-282|Fleet Battles
-283|Folklore
-284|Forced into a Relationship
-285|Forced Living Arrangements
-286|Forced Marriage
-287|Forgetful Protagonist
-288|Former Hero
-289|Fox Spirits
-290|Friends Become Enemies
-291|Friendship
-292|Fujoshi
-293|Futanari
-294|Futuristic Setting
-295|Galge
-296|Gambling
-297|Game Elements
-298|Game Ranking System
-299|Gamers
-300|Gangs
-301|Gate to Another World
-302|Genderless Protagonist
-303|Generals
-304|Genetic Modifications
-305|Genies
-306|Genius Protagonist
-307|Ghosts
-308|Gladiators
-309|Glasses-wearing Love Interests
-310|Glasses-wearing Protagonist
-311|Goblins
-312|God Protagonist
-313|God-human Relationship
-314|Goddesses
-315|Godly Powers
-316|Gods
-317|Golems
-318|Gore
-319|Grave Keepers
-320|Grinding
-321|Guardian Relationship
-322|Guilds
-323|Gunfighters
-324|Hackers
-325|Half-human Protagonist
-326|Handjob
-327|Handsome Male Lead
-328|Hard-Working Protagonist
-329|Harem-seeking Protagonist
-330|Harsh Training
-331|Hated Protagonist
-332|Healers
-333|Heartwarming
-334|Heaven
-335|Heavenly Tribulation
-336|Hell
-337|Helpful Protagonist
-338|Herbalist
-339|Heroes
-340|Heterochromia
-341|Hidden Abilities
-342|Hiding True Abilities
-343|Hiding True Identity
-344|Hikikomori
-345|Homunculus
-346|Honest Protagonist
-347|Hospital
-348|Hot-blooded Protagonist
-349|Human Experimentation
-350|Human Weapon
-351|Human-Nonhuman Relationship
-352|Humanoid Protagonist
-353|Hunters
-354|Hypnotism
-355|Identity Crisis
-356|Imaginary Friend
-357|Immortals
-358|Imperial Harem
-359|Incest
-360|Incubus
-361|Indecisive Protagonist
-362|Industrialization
-363|Inferiority Complex
-364|Inheritance
-365|Inscriptions
-366|Insects
-367|Interconnected Storylines
-368|Interdimensional Travel
-369|Introverted Protagonist
-370|Investigations
-371|Invisibility
-372|Jack of All Trades
-373|Jealousy
-374|Jiangshi
-375|Jobless Class
-376|JSDF
-377|Kidnappings
-378|Kind Love Interests
-379|Kingdom Building
-380|Kingdoms
-381|Knights
-382|Kuudere
-383|Lack of Common Sense
-384|Language Barrier
-385|Late Romance
-386|Lawyers
-387|Lazy Protagonist
-388|Leadership
-389|Legends
-390|Level System
-391|Library
-392|Limited Lifespan
-393|Living Abroad
-394|Living Alone
-395|Loli
-396|Loneliness
-397|Loner Protagonist
-398|Long Separations
-399|Long-distance Relationship
-400|Lost Civilizations
-401|Lottery
-402|Love at First Sight
-403|Love Interest Falls in Love First
-404|Love Rivals
-405|Love Triangles
-406|Lovers Reunited
-407|Low-key Protagonist
-408|Loyal Subordinates
-409|Lucky Protagonist
-410|Magic
-411|Magic Beasts
-412|Magic Formations
-413|Magical Girls
-414|Magical Space
-415|Magical Technology
-416|Maids
-417|Male Protagonist
-418|Male to Female
-419|Male Yandere
-420|Management
-421|Mangaka
-422|Manipulative Characters
-423|Manly Gay Couple
-424|Marriage
-425|Marriage of Convenience
-426|Martial Spirits
-427|Masochistic Characters
-428|Master-Disciple Relationship
-429|Master-Servant Relationship
-430|Masturbation
-431|Matriarchy
-432|Mature Protagonist
-433|Medical Knowledge
-434|Medieval
-435|Mercenaries
-436|Merchants
-437|Military
-438|Mind Break
-439|Mind Control
-440|Misandry
-441|Mismatched Couple
-442|Misunderstandings
-443|MMORPG
-444|Mob Protagonist
-445|Models
-446|Modern Day
-447|Modern Knowledge
-448|Money Grubber
-449|Monster Girls
-450|Monster Society
-451|Monster Tamer
-452|Monsters
-453|Movies
-454|Mpreg
-455|Multiple Identities
-456|Multiple Personalities
-457|Multiple POV
-458|Multiple Protagonists
-459|Multiple Realms
-460|Multiple Reincarnated Individuals
-461|Multiple Timelines
-462|Multiple Transported Individuals
-463|Murders
-464|Music
-465|Mutated Creatures
-466|Mutations
-467|Mute Character
-468|Mysterious Family Background
-469|Mysterious Illness
-470|Mysterious Past
-471|Mystery Solving
-472|Mythical Beasts
-473|Mythology
-474|Naive Protagonist
-475|Narcissistic Protagonist
-476|Nationalism
-477|Near-Death Experience
-478|Necromancer
-479|Neet
-480|Netorare
-481|Netorase
-482|Netori
-483|Nightmares
-484|Ninjas
-485|Nobles
-486|Non-humanoid Protagonist
-487|Non-linear Storytelling
-488|Nudity
-489|Nurses
-490|Obsessive Love
-491|Office Romance
-492|Older Love Interests
-493|Omegaverse
-494|Oneshot
-495|Online Romance
-496|Onmyouji
-497|Orcs
-498|Organized Crime
-499|Orgy
-500|Orphans
-501|Otaku
-502|Otome Game
-503|Outcasts
-504|Outdoor Intercourse
-505|Outer Space
-506|Overpowered Protagonist
-507|Overprotective Siblings
-508|Pacifist Protagonist
-509|Paizuri
-510|Parallel Worlds
-511|Parasites
-512|Parent Complex
-513|Parody
-514|Part-Time Job
-515|Past Plays a Big Role
-516|Past Trauma
-517|Persistent Love Interests
-518|Personality Changes
-519|Perverted Protagonist
-520|Pets
-521|Pharmacist
-522|Philosophical
-523|Phobias
-524|Phoenixes
-525|Photography
-526|Pill Based Cultivation
-527|Pill Concocting
-528|Pilots
-529|Pirates
-530|Playboys
-531|Playful Protagonist
-532|Poetry
-533|Poisons
-534|Police
-535|Polite Protagonist
-536|Politics
-537|Polyandry
-538|Polygamy
-539|Poor Protagonist
-540|Poor to Rich
-541|Popular Love Interests
-542|Possession
-543|Possessive Characters
-544|Post-apocalyptic
-545|Power Couple
-546|Power Struggle
-547|Pragmatic Protagonist
-548|Precognition
-549|Pregnancy
-550|Pretend Lovers
-551|Previous Life Talent
-552|Priestesses
-553|Priests
-554|Prison
-555|Proactive Protagonist
-556|Programmer
-557|Prophecies
-558|Prostitutes
-559|Protagonist Falls in Love First
-560|Protagonist Strong from the Start
-561|Protagonist with Multiple Bodies
-562|Psychic Powers
-563|Psychopaths
-564|Puppeteers
-565|Quiet Characters
-566|Quirky Characters
-567|R-15
-568|R-18
-569|Race Change
-570|Racism
-571|Rape
-572|Rape Victim Becomes Lover
-573|Rebellion
-574|Reincarnated as a Monster
-575|Reincarnated as an Object
-576|Reincarnated in a Game World
-577|Reincarnated in Another World
-578|Reincarnation
-579|Religions
-580|Reluctant Protagonist
-581|Reporters
-582|Restaurant
-583|Resurrection
-584|Returning from Another World
-585|Revenge
-586|Reverse Harem
-587|Reverse Rape
-588|Reversible Couple
-589|Rich to Poor
-590|Righteous Protagonist
-591|Rivalry
-592|Romantic Subplot
-593|Roommates
-594|Royalty
-595|Ruthless Protagonist
-596|Sadistic Characters
-597|Saints
-598|Salaryman
-599|Samurai
-600|Saving the World
-601|Schemes And Conspiracies
-602|Schizophrenia
-603|Scientists
-604|Sculptors
-605|Sealed Power
-606|Second Chance
-607|Secret Crush
-608|Secret Identity
-609|Secret Organizations
-610|Secret Relationship
-611|Secretive Protagonist
-612|Secrets
-613|Sect Development
-614|Seduction
-615|Seeing Things Other Humans Can't
-616|Selfish Protagonist
-617|Selfless Protagonist
-618|Seme Protagonist
-619|Senpai-Kouhai Relationship
-620|Sentient Objects
-621|Sentimental Protagonist
-622|Serial Killers
-623|Servants
-624|Seven Deadly Sins
-625|Seven Virtues
-626|Sex Friends
-627|Sex Slaves
-628|Sexual Abuse
-629|Sexual Cultivation Technique
-630|Shameless Protagonist
-631|Shapeshifters
-632|Sharing A Body
-633|Sharp-tongued Characters
-634|Shield User
-635|Shikigami
-636|Short Story
-637|Shota
-638|Shoujo-Ai Subplot
-639|Shounen-Ai Subplot
-640|Showbiz
-641|Shy Characters
-642|Sibling Rivalry
-643|Sibling's Care
-644|Siblings
-645|Siblings Not Related by Blood
-646|Sickly Characters
-647|Sign Language
-648|Singers
-649|Single Parent
-650|Sister Complex
-651|Skill Assimilation
-652|Skill Books
-653|Skill Creation
-654|Slave Harem
-655|Slave Protagonist
-656|Slaves
-657|Sleeping
-658|Slow Growth at Start
-659|Slow Romance
-660|Smart Couple
-661|Social Outcasts
-662|Soldiers
-663|Soul Power
-664|Souls
-665|Spatial Manipulation
-666|Spear Wielder
-667|Special Abilities
-668|Spies
-669|Spirit Advisor
-670|Spirit Users
-671|Spirits
-672|Stalkers
-673|Stockholm Syndrome
-674|Stoic Characters
-675|Store Owner
-676|Straight Seme
-677|Straight Uke
-678|Strategic Battles
-679|Strategist
-680|Strength-based Social Hierarchy
-681|Strong Love Interests
-682|Strong to Stronger
-683|Stubborn Protagonist
-684|Student Council
-685|Student-Teacher Relationship
-686|Succubus
-687|Sudden Strength Gain
-688|Sudden Wealth
-689|Suicides
-690|Summoned Hero
-691|Summoning Magic
-692|Survival
-693|Survival Game
-694|Sword And Magic
-695|Sword Wielder
-696|System
-697|Teachers
-698|Teamwork
-699|Technological Gap
-700|Tentacles
-701|Terminal Illness
-702|Terrorists
-703|Thieves
-704|Threesome
-705|Thriller
-706|Time Loop
-707|Time Manipulation
-708|Time Paradox
-709|Time Skip
-710|Time Travel
-711|Timid Protagonist
-712|Tomboyish Female Lead
-713|Torture
-714|Toys
-715|Tragic Past
-716|Transformation Ability
-717|Transmigration
-718|Transplanted Memories
-719|Transported into a Game World
-720|Transported Modern Structure
-721|Transported to Another World
-722|Trap
-723|Tribal Society
-724|Trickster
-725|Tsundere
-726|Twins
-727|Twisted Personality
-728|Ugly Protagonist
-729|Ugly to Beautiful
-730|Unconditional Love
-731|Underestimated Protagonist
-732|Unique Cultivation Technique
-733|Unique Weapon User
-734|Unique Weapons
-735|Unlimited Flow
-736|Unlucky Protagonist
-737|Unreliable Narrator
-738|Unrequited Love
-739|Valkyries
-740|Vampires
-741|Villainess Noble Girls
-742|Virtual Reality
-743|Vocaloid
-744|Voice Actors
-745|Voyeurism
-746|Waiters
-747|War Records
-748|Wars
-749|Weak Protagonist
-750|Weak to Strong
-751|Wealthy Characters
-752|Werebeasts
-753|Wishes
-754|Witches
-755|Wizards
-756|World Hopping
-757|World Travel
-758|World Tree
-759|Writers
-760|Yandere
-761|Youkai
-762|Younger Brothers
-763|Younger Love Interests
-764|Younger Sisters
-765|Zombies
-766|Marvel
-767|One Piece
-768|Harry Potter
-769|Naruto
-770|Bleach
-771|Pokemon
-772|Douluo Dalu
-773|Dragon Ball
-774|Yu-Gi-Oh!
-775|Warhammer
-776|Jujutsu Kaisen
-777|Hunter x Hunter
-778|DC Universe
-779|Hollywood
-780|Football
-781|Gao Wu
-782|Live Streaming
-783|Cyberpunk 2077
-784|Game Creator
-785|Swallowed Star
-786|Simulator
-787|Single Female Lead
-788|Western Names
-789|Dark Fantasy
-790|Minecraft
-791|League of Legends
-792|Mortal Flow
-793|Proficiency
-794|DnD
-795|Three Kingdoms
-796|Journey to the West
-797|Devouring
-798|Eavesdropping
-799|Lord of the Mysteries
-800|Conferred Gods
-801|Honghuang
-802|Territory Management
-803|Heaven Defying Comprehension
-804|Detective Conan
-806|Business Wars
-807|Copy
-808|Faith Dependent Deities
-809|Basketball
-810|Undead Protagonist
-811|Sign In
-812|Demon Slayer
-813|Game of Thrones
-814|Fairy Tail
-815|Genshin Impact
-816|Frieren
-817|Star Wars
-818|Honkai
-819|Witcher
-820|Siheyuan
-821|Hong Kong
-822|Array
-823|Lord
-824|Life Script
-825|More Children More Blessings
-826|Overlord
-827|Class Awakening
-828|Spiritual Energy Revival
-829|Reborn
-830|Reality-Game Fusion
-831|Reborn as the Villain
-832|BTTH
-833|Arknights
-834|Uma Musume
-835|Steampunk
-836|The Boys
-837|One Punch Man
-838|Ultraman
-839|Black Clover
-840|Danmachi
-841|Daily Intelligence
-842|Simultaneous Transmigration
-843|Kamen Rider
-844|Nasuverse
-845|Versatile Mage
-846|Adapted to Donghua
-847|Highschool DxD
-848|Furry Relationship
-849|Immortal Protagonist
-850|Toaru
-851|Digimon
-852|The Walking Dead
-853|Lord of the Ring
-854|Classroom of the Elite
-855|Stand User
-856|Resident Evil
-857|Touhou Project
-858|Project Moon
-859|JoJo’s Bizarre Adventure
-860|Machinist 
-861|Qing Transmigration
-862|Kirkmanverse
-863|Pirates of Caribbean
-864|King's Avatar
-865|Hikigaya
-866|Strike the Blood
-867|Zenless Zone Zero
-868|Fabulous Beast
-869|The Eminence in Shadow
-870|Slay the Gods
-871|Behind-the-Scenes Mastermind
-872|Final Fantasy
-873|1900s
-874|1910s
-875|1920s
-876|1930s
-877|1940s
-878|1950s
-879|1960s
-880|1970s
-881|1980s
-882|1990s
-883|2000s
-884|2010s
+1|Abandoned Children|1
+2|Ability Steal|2
+3|Absent Parents|1
+4|Abusive Characters|9
+5|Academy|4
+6|Accelerated Growth|1
+7|Acting|8
+8|Adapted from Manga|10
+9|Adapted from Manhua|10
+10|Adapted to Anime|10
+11|Adapted to Drama|10
+12|Adapted to Drama CD|10
+13|Adapted to Game|10
+14|Adapted to Manga|10
+15|Adapted to Manhua|10
+16|Adapted to Manhwa|10
+17|Adapted to Movie|10
+18|Adapted to Visual Novel|10
+19|Adopted Children|1
+20|Adopted Protagonist|1
+21|Adultery|5
+22|Adventurers|7
+23|Affair|5
+24|Age Progression|1
+25|Age Regression|1
+26|Aggressive Characters|1
+27|Alchemy|2
+28|Aliens|7
+29|All-Girls School|4
+30|Alternate World|3
+31|Amnesia|6
+32|Amusement Park|3
+33|Anal|5
+34|Ancient China|3
+35|Ancient Times|3
+36|Androgynous Characters|1
+37|Androids|2
+38|Angels|7
+39|Animal Characteristics|11
+40|Animal Rearing|11
+41|Anti-Magic|2
+42|Anti-social Protagonist|1
+43|Antihero Protagonist|1
+44|Antique Shop|8
+45|Apartment Life|11
+46|Apathetic Protagonist|1
+47|Apocalypse|3
+48|Appearance Changes|2
+49|Appearance Different from Actual Age|1
+50|Archery|8
+51|Aristocracy|4
+52|Arms Dealers|4
+53|Army|4
+54|Army Building|4
+55|Arranged Marriage|5
+56|Arrogant Characters|1
+57|Artifact Crafting|11
+58|Artifacts|11
+59|Artificial Intelligence|2
+60|Artists|8
+61|Assassins|4
+62|Astrologers|7
+63|Autism|1
+64|Automatons|2
+65|Average-looking Protagonist|1
+66|Award-winning Work|10
+67|Awkward Protagonist|1
+68|Bands|8
+69|Based on a Movie|10
+70|Based on a Song|10
+71|Based on a TV Show|10
+72|Based on a Video Game|10
+73|Based on a Visual Novel|10
+74|Based on an Anime|10
+75|Battle Academy|4
+76|Battle Competition|4
+77|BDSM|5
+78|Beast Companions|7
+79|Beastkin|7
+80|Beasts|7
+81|Beautiful Female Lead|1
+82|Bestiality|5
+83|Betrayal|6
+84|Bickering Couple|5
+85|Biochip|2
+86|Bisexual Protagonist|1
+87|Black Belly|1
+88|Blackmail|5
+89|Blacksmith|8
+90|Blind Dates|5
+91|Blind Protagonist|1
+92|Blood Manipulation|2
+93|Bloodlines|2
+94|Body Swap|2
+95|Body Tempering|2
+96|Body-double|11
+97|Bodyguards|8
+98|Books|11
+99|Bookworm|1
+100|Boss-Subordinate Relationship|4
+101|Brainwashing|2
+102|Breast Fetish|5
+103|Broken Engagement|5
+104|Brother Complex|5
+105|Brotherhood|5
+106|Buddhism|11
+107|Bullying|9
+108|Business Management|4
+109|Businessmen|8
+110|Butlers|8
+111|Calm Protagonist|1
+112|Cannibalism|6
+113|Card Games|11
+114|Carefree Protagonist|1
+115|Caring Protagonist|1
+116|Cautious Protagonist|1
+117|Celebrities|8
+118|Character Growth|1
+119|Charismatic Protagonist|1
+120|Charming Protagonist|1
+121|Chat Rooms|6
+122|Cheats|2
+123|Chefs|8
+124|Child Abuse|5
+125|Child Protagonist|1
+126|Childcare|11
+127|Childhood Friends|5
+128|Childhood Love|5
+129|Childhood Promise|5
+130|Childish Protagonist|1
+131|Chuunibyou|1
+132|Clan Building|4
+133|Classic|3
+134|Clever Protagonist|1
+135|Clingy Lover|5
+136|Clones|2
+137|Clubs|4
+138|Clumsy Love Interests|5
+139|Co-Workers|11
+140|Cohabitation|11
+141|Cold Love Interests|5
+142|Cold Protagonist|1
+143|Collection of Short Stories|6
+144|College/University|11
+145|Coma|1
+146|Comedic Undertone|9
+147|Coming of Age|1
+148|Complex Family Relationships|5
+149|Conditional Power|2
+150|Confident Protagonist|1
+151|Confinement|5
+152|Conflicting Loyalties|6
+153|Contracts|4
+154|Cooking|11
+155|Corruption|9
+156|Cosmic Wars|4
+157|Cosplay|8
+158|Couple Growth|1
+159|Court Official|4
+160|Cousins|5
+161|Cowardly Protagonist|1
+162|Crafting|4
+163|Crime|6
+164|Criminals|6
+165|Cross-dressing|1
+166|Crossover|6
+167|Cruel Characters|9
+168|Cryostasis|2
+169|Cultivation|2
+170|Cunnilingus|5
+171|Cunning Protagonist|1
+172|Curious Protagonist|1
+173|Curses|2
+174|Cute Children|11
+175|Cute Protagonist|1
+176|Cute Story|9
+177|Dancers|8
+178|Dao Companion|2
+179|Dao Comprehension|2
+180|Daoism|11
+181|Dark|9
+182|Dead Protagonist|1
+183|Death|6
+184|Death of Loved Ones|5
+185|Debts|4
+186|Delinquents|1
+187|Delusions|6
+188|Demi-Humans|7
+189|Demon Lord|7
+190|Demonic Cultivation Technique|2
+191|Demons|7
+192|Dense Protagonist|1
+193|Depictions of Cruelty|9
+194|Depression|9
+195|Destiny|9
+196|Detectives|8
+197|Determined Protagonist|1
+198|Devoted Love Interests|5
+199|Different Social Status|5
+200|Disabilities|1
+201|Discrimination|9
+202|Disfigurement|11
+203|Dishonest Protagonist|1
+204|Distrustful Protagonist|1
+205|Divination|2
+206|Divine Protection|2
+207|Divorce|5
+208|Doctors|8
+209|Dolls/Puppets|11
+210|Domestic Affairs|11
+211|Doting Love Interests|5
+212|Doting Older Siblings|1
+213|Doting Parents|1
+214|Dragon Riders|8
+215|Dragon Slayers|8
+216|Dragons|7
+217|Dreams|11
+218|Drugs|4
+219|Druids|7
+220|Dungeon Master|2
+221|Dungeons|3
+222|Dwarfs|7
+223|Dystopia|3
+224|e-Sports|8
+225|Early Romance|5
+226|Earth Invasion|4
+227|Easy Going Life|11
+228|Economics|4
+229|Editors|8
+230|Eidetic Memory|2
+231|Elderly Protagonist|1
+232|Elemental Magic|2
+233|Elves|7
+234|Emotionally Weak Protagonist|1
+235|Empires|4
+236|Enemies Become Allies|5
+237|Enemies Become Lovers|5
+238|Engagement|5
+239|Engineer|7
+240|Enlightenment|1
+241|Episodic|6
+242|Eunuch|4
+243|European Ambience|3
+244|Evil Gods|7
+245|Evil Organizations|7
+246|Evil Protagonist|1
+247|Evil Religions|4
+248|Evolution|1
+249|Exhibitionism|5
+250|Exorcism|2
+251|Eye Powers|2
+252|Fairies|7
+253|Fallen Angels|7
+254|Fallen Nobility|1
+255|Familial Love|5
+256|Familiars|7
+257|Family|5
+258|Family Business|4
+259|Family Conflict|5
+260|Famous Parents|1
+261|Famous Protagonist|1
+262|Fanaticism|9
+264|Fantasy Creatures|7
+265|Fantasy World|3
+266|Farming|4
+267|Fast Cultivation|2
+268|Fast Learner|1
+269|Fat Protagonist|1
+270|Fat to Fit|1
+271|Fated Lovers|5
+272|Fearless Protagonist|1
+273|Fellatio|5
+274|Female Master|8
+275|Female Protagonist|1
+276|Female to Male|1
+277|Feng Shui|11
+278|Firearms|2
+279|First Love|5
+280|First-time Intercourse|5
+281|Flashbacks|6
+282|Fleet Battles|4
+283|Folklore|11
+284|Forced into a Relationship|5
+285|Forced Living Arrangements|5
+286|Forced Marriage|5
+287|Forgetful Protagonist|1
+288|Former Hero|1
+289|Fox Spirits|7
+290|Friends Become Enemies|5
+291|Friendship|9
+292|Fujoshi|1
+293|Futanari|5
+294|Futuristic Setting|3
+295|Galge|2
+296|Gambling|4
+297|Game Elements|2
+298|Game Ranking System|2
+299|Gamers|8
+300|Gangs|4
+301|Gate to Another World|3
+302|Genderless Protagonist|1
+303|Generals|4
+304|Genetic Modifications|2
+305|Genies|2
+306|Genius Protagonist|1
+307|Ghosts|7
+308|Gladiators|4
+309|Glasses-wearing Love Interests|5
+310|Glasses-wearing Protagonist|1
+311|Goblins|7
+312|God Protagonist|1
+313|God-human Relationship|7
+314|Goddesses|7
+315|Godly Powers|2
+316|Gods|7
+317|Golems|7
+318|Gore|6
+319|Grave Keepers|7
+320|Grinding|2
+321|Guardian Relationship|5
+322|Guilds|4
+323|Gunfighters|8
+324|Hackers|8
+325|Half-human Protagonist|1
+326|Handjob|5
+327|Handsome Male Lead|1
+328|Hard-Working Protagonist|1
+329|Harem-seeking Protagonist|5
+330|Harsh Training|1
+331|Hated Protagonist|1
+332|Healers|2
+333|Heartwarming|9
+334|Heaven|3
+335|Heavenly Tribulation|2
+336|Hell|3
+337|Helpful Protagonist|1
+338|Herbalist|7
+339|Heroes|7
+340|Heterochromia|11
+341|Hidden Abilities|2
+342|Hiding True Abilities|1
+343|Hiding True Identity|1
+344|Hikikomori|1
+345|Homunculus|7
+346|Honest Protagonist|1
+347|Hospital|3
+348|Hot-blooded Protagonist|1
+349|Human Experimentation|6
+350|Human Weapon|1
+351|Human-Nonhuman Relationship|5
+352|Humanoid Protagonist|1
+353|Hunters|4
+354|Hypnotism|2
+355|Identity Crisis|6
+356|Imaginary Friend|6
+357|Immortals|7
+358|Imperial Harem|4
+359|Incest|5
+360|Incubus|7
+361|Indecisive Protagonist|1
+362|Industrialization|4
+363|Inferiority Complex|1
+364|Inheritance|6
+365|Inscriptions|2
+366|Insects|7
+367|Interconnected Storylines|6
+368|Interdimensional Travel|3
+369|Introverted Protagonist|1
+370|Investigations|6
+371|Invisibility|2
+372|Jack of All Trades|11
+373|Jealousy|5
+374|Jiangshi|7
+375|Jobless Class|1
+376|JSDF|4
+377|Kidnappings|5
+378|Kind Love Interests|5
+379|Kingdom Building|4
+380|Kingdoms|4
+381|Knights|4
+382|Kuudere|1
+383|Lack of Common Sense|1
+384|Language Barrier|11
+385|Late Romance|5
+386|Lawyers|8
+387|Lazy Protagonist|1
+388|Leadership|4
+389|Legends|7
+390|Level System|2
+391|Library|3
+392|Limited Lifespan|1
+393|Living Abroad|11
+394|Living Alone|11
+395|Loli|1
+396|Loneliness|9
+397|Loner Protagonist|1
+398|Long Separations|5
+399|Long-distance Relationship|5
+400|Lost Civilizations|3
+401|Lottery|2
+402|Love at First Sight|5
+403|Love Interest Falls in Love First|5
+404|Love Rivals|5
+405|Love Triangles|5
+406|Lovers Reunited|5
+407|Low-key Protagonist|1
+408|Loyal Subordinates|4
+409|Lucky Protagonist|1
+410|Magic|2
+411|Magic Beasts|7
+412|Magic Formations|2
+413|Magical Girls|2
+414|Magical Space|2
+415|Magical Technology|2
+416|Maids|8
+417|Male Protagonist|1
+418|Male to Female|1
+419|Male Yandere|5
+420|Management|4
+421|Mangaka|8
+422|Manipulative Characters|1
+423|Manly Gay Couple|5
+424|Marriage|5
+425|Marriage of Convenience|5
+426|Martial Spirits|2
+427|Masochistic Characters|1
+428|Master-Disciple Relationship|4
+429|Master-Servant Relationship|4
+430|Masturbation|5
+431|Matriarchy|4
+432|Mature Protagonist|1
+433|Medical Knowledge|8
+434|Medieval|3
+435|Mercenaries|8
+436|Merchants|8
+437|Military|4
+438|Mind Break|5
+439|Mind Control|2
+440|Misandry|11
+441|Mismatched Couple|5
+442|Misunderstandings|9
+443|MMORPG|2
+444|Mob Protagonist|1
+445|Models|8
+446|Modern Day|3
+447|Modern Knowledge|1
+448|Money Grubber|4
+449|Monster Girls|7
+450|Monster Society|3
+451|Monster Tamer|7
+452|Monsters|7
+453|Movies|8
+454|Mpreg|3
+455|Multiple Identities|6
+456|Multiple Personalities|1
+457|Multiple POV|6
+458|Multiple Protagonists|1
+459|Multiple Realms|3
+460|Multiple Reincarnated Individuals|3
+461|Multiple Timelines|3
+462|Multiple Transported Individuals|3
+463|Murders|6
+464|Music|8
+465|Mutated Creatures|7
+466|Mutations|7
+467|Mute Character|1
+468|Mysterious Family Background|1
+469|Mysterious Illness|9
+470|Mysterious Past|6
+471|Mystery Solving|6
+472|Mythical Beasts|7
+473|Mythology|11
+474|Naive Protagonist|1
+475|Narcissistic Protagonist|1
+476|Nationalism|9
+477|Near-Death Experience|1
+478|Necromancer|2
+479|Neet|1
+480|Netorare|5
+481|Netorase|5
+482|Netori|5
+483|Nightmares|6
+484|Ninjas|7
+485|Nobles|4
+486|Non-humanoid Protagonist|1
+487|Non-linear Storytelling|6
+488|Nudity|5
+489|Nurses|8
+490|Obsessive Love|5
+491|Office Romance|5
+492|Older Love Interests|5
+493|Omegaverse|3
+494|Oneshot|6
+495|Online Romance|5
+496|Onmyouji|2
+497|Orcs|7
+498|Organized Crime|6
+499|Orgy|5
+500|Orphans|1
+501|Otaku|11
+502|Otome Game|2
+503|Outcasts|1
+504|Outdoor Intercourse|5
+505|Outer Space|3
+506|Overpowered Protagonist|1
+507|Overprotective Siblings|5
+508|Pacifist Protagonist|1
+509|Paizuri|5
+510|Parallel Worlds|3
+511|Parasites|2
+512|Parent Complex|5
+513|Parody|6
+514|Part-Time Job|8
+515|Past Plays a Big Role|6
+516|Past Trauma|1
+517|Persistent Love Interests|5
+518|Personality Changes|1
+519|Perverted Protagonist|1
+520|Pets|11
+521|Pharmacist|8
+522|Philosophical|9
+523|Phobias|9
+524|Phoenixes|7
+525|Photography|8
+526|Pill Based Cultivation|2
+527|Pill Concocting|2
+528|Pilots|8
+529|Pirates|4
+530|Playboys|1
+531|Playful Protagonist|1
+532|Poetry|8
+533|Poisons|8
+534|Police|7
+535|Polite Protagonist|1
+536|Politics|4
+537|Polyandry|5
+538|Polygamy|5
+539|Poor Protagonist|1
+540|Poor to Rich|4
+541|Popular Love Interests|5
+542|Possession|2
+543|Possessive Characters|5
+544|Post-apocalyptic|3
+545|Power Couple|5
+546|Power Struggle|6
+547|Pragmatic Protagonist|1
+548|Precognition|2
+549|Pregnancy|5
+550|Pretend Lovers|5
+551|Previous Life Talent|1
+552|Priestesses|7
+553|Priests|7
+554|Prison|3
+555|Proactive Protagonist|1
+556|Programmer|8
+557|Prophecies|6
+558|Prostitutes|5
+559|Protagonist Falls in Love First|5
+560|Protagonist Strong from the Start|1
+561|Protagonist with Multiple Bodies|2
+562|Psychic Powers|2
+563|Psychopaths|1
+564|Puppeteers|8
+565|Quiet Characters|1
+566|Quirky Characters|1
+567|R-15|9
+568|R-18|5
+569|Race Change|1
+570|Racism|9
+571|Rape|5
+572|Rape Victim Becomes Lover|5
+573|Rebellion|6
+574|Reincarnated as a Monster|1
+575|Reincarnated as an Object|1
+576|Reincarnated in a Game World|2
+577|Reincarnated in Another World|1
+578|Reincarnation|1
+579|Religions|4
+580|Reluctant Protagonist|1
+581|Reporters|8
+582|Restaurant|3
+583|Resurrection|2
+584|Returning from Another World|1
+585|Revenge|6
+586|Reverse Harem|5
+587|Reverse Rape|5
+588|Reversible Couple|5
+589|Rich to Poor|4
+590|Righteous Protagonist|1
+591|Rivalry|6
+592|Romantic Subplot|5
+593|Roommates|11
+594|Royalty|4
+595|Ruthless Protagonist|1
+596|Sadistic Characters|1
+597|Saints|7
+598|Salaryman|1
+599|Samurai|4
+600|Saving the World|6
+601|Schemes And Conspiracies|6
+602|Schizophrenia|1
+603|Scientists|8
+604|Sculptors|8
+605|Sealed Power|1
+606|Second Chance|1
+607|Secret Crush|5
+608|Secret Identity|6
+609|Secret Organizations|4
+610|Secret Relationship|5
+611|Secretive Protagonist|1
+612|Secrets|6
+613|Sect Development|4
+614|Seduction|5
+615|Seeing Things Other Humans Can't|2
+616|Selfish Protagonist|1
+617|Selfless Protagonist|1
+618|Seme Protagonist|1
+619|Senpai-Kouhai Relationship|5
+620|Sentient Objects|7
+621|Sentimental Protagonist|1
+622|Serial Killers|8
+623|Servants|8
+624|Seven Deadly Sins|7
+625|Seven Virtues|7
+626|Sex Friends|5
+627|Sex Slaves|5
+628|Sexual Abuse|5
+629|Sexual Cultivation Technique|2
+630|Shameless Protagonist|1
+631|Shapeshifters|2
+632|Sharing A Body|2
+633|Sharp-tongued Characters|1
+634|Shield User|8
+635|Shikigami|7
+636|Short Story|6
+637|Shota|1
+638|Shoujo-Ai Subplot|5
+639|Shounen-Ai Subplot|5
+640|Showbiz|8
+641|Shy Characters|1
+642|Sibling Rivalry|5
+643|Sibling's Care|5
+644|Siblings|5
+645|Siblings Not Related by Blood|5
+646|Sickly Characters|9
+647|Sign Language|11
+648|Singers|8
+649|Single Parent|5
+650|Sister Complex|5
+651|Skill Assimilation|1
+652|Skill Books|2
+653|Skill Creation|1
+654|Slave Harem|5
+655|Slave Protagonist|1
+656|Slaves|4
+657|Sleeping|11
+658|Slow Growth at Start|1
+659|Slow Romance|5
+660|Smart Couple|5
+661|Social Outcasts|9
+662|Soldiers|8
+663|Soul Power|2
+664|Souls|7
+665|Spatial Manipulation|2
+666|Spear Wielder|8
+667|Special Abilities|2
+668|Spies|8
+669|Spirit Advisor|7
+670|Spirit Users|2
+671|Spirits|7
+672|Stalkers|5
+673|Stockholm Syndrome|5
+674|Stoic Characters|1
+675|Store Owner|8
+676|Straight Seme|1
+677|Straight Uke|1
+678|Strategic Battles|4
+679|Strategist|7
+680|Strength-based Social Hierarchy|4
+681|Strong Love Interests|5
+682|Strong to Stronger|1
+683|Stubborn Protagonist|1
+684|Student Council|4
+685|Student-Teacher Relationship|4
+686|Succubus|7
+687|Sudden Strength Gain|1
+688|Sudden Wealth|4
+689|Suicides|9
+690|Summoned Hero|1
+691|Summoning Magic|2
+692|Survival|6
+693|Survival Game|2
+694|Sword And Magic|2
+695|Sword Wielder|7
+696|System|2
+697|Teachers|8
+698|Teamwork|4
+699|Technological Gap|3
+700|Tentacles|7
+701|Terminal Illness|9
+702|Terrorists|4
+703|Thieves|8
+704|Threesome|5
+705|Thriller|6
+706|Time Loop|3
+707|Time Manipulation|2
+708|Time Paradox|3
+709|Time Skip|6
+710|Time Travel|3
+711|Timid Protagonist|1
+712|Tomboyish Female Lead|1
+713|Torture|5
+714|Toys|5
+715|Tragic Past|1
+716|Transformation Ability|2
+717|Transmigration|1
+718|Transplanted Memories|1
+719|Transported into a Game World|1
+720|Transported Modern Structure|3
+721|Transported to Another World|1
+722|Trap|1
+723|Tribal Society|3
+724|Trickster|1
+725|Tsundere|5
+726|Twins|5
+727|Twisted Personality|1
+728|Ugly Protagonist|1
+729|Ugly to Beautiful|11
+730|Unconditional Love|5
+731|Underestimated Protagonist|1
+732|Unique Cultivation Technique|2
+733|Unique Weapon User|8
+734|Unique Weapons|11
+735|Unlimited Flow|2
+736|Unlucky Protagonist|1
+737|Unreliable Narrator|1
+738|Unrequited Love|5
+739|Valkyries|7
+740|Vampires|7
+741|Villainess Noble Girls|1
+742|Virtual Reality|2
+743|Vocaloid|10
+744|Voice Actors|8
+745|Voyeurism|5
+746|Waiters|8
+747|War Records|4
+748|Wars|4
+749|Weak Protagonist|1
+750|Weak to Strong|1
+751|Wealthy Characters|4
+752|Werebeasts|7
+753|Wishes|2
+754|Witches|7
+755|Wizards|2
+756|World Hopping|3
+757|World Travel|3
+758|World Tree|3
+759|Writers|8
+760|Yandere|5
+761|Youkai|7
+762|Younger Brothers|5
+763|Younger Love Interests|5
+764|Younger Sisters|5
+765|Zombies|7
+766|Marvel|10
+767|One Piece|10
+768|Harry Potter|10
+769|Naruto|10
+770|Bleach|10
+771|Pokemon|10
+772|Douluo Dalu|10
+773|Dragon Ball|10
+774|Yu-Gi-Oh!|10
+775|Warhammer|10
+776|Jujutsu Kaisen|10
+777|Hunter x Hunter|10
+778|DC Universe|10
+779|Hollywood|8
+780|Football|8
+781|Gao Wu|2
+782|Live Streaming|8
+783|Cyberpunk 2077|10
+784|Game Creator|2
+785|Swallowed Star|10
+786|Simulator|2
+787|Single Female Lead|5
+788|Western Names|11
+789|Dark Fantasy|9
+790|Minecraft|10
+791|League of Legends|10
+792|Mortal Flow|2
+793|Proficiency|2
+794|DnD|10
+795|Three Kingdoms|3
+796|Journey to the West|10
+797|Devouring|2
+798|Eavesdropping|6
+799|Lord of the Mysteries|10
+800|Conferred Gods|10
+801|Honghuang|10
+802|Territory Management|4
+803|Heaven Defying Comprehension|1
+804|Detective Conan|10
+806|Business Wars|4
+807|Copy|2
+808|Faith Dependent Deities|2
+809|Basketball|8
+810|Undead Protagonist|1
+811|Sign In|2
+812|Demon Slayer|10
+813|Game of Thrones|10
+814|Fairy Tail|10
+815|Genshin Impact|10
+816|Frieren|10
+817|Star Wars|10
+818|Honkai Impact 3|10
+819|Witcher|10
+820|Siheyuan|10
+821|Hong Kong|11
+822|Array|2
+823|Lord|4
+824|Life Script|6
+825|More Children More Blessings|5
+826|Overlord|10
+827|Class Awakening|2
+828|Spiritual Energy Revival|3
+829|Reborn|1
+830|Reality-Game Fusion|2
+831|Reborn as the Villain|1
+832|BTTH|10
+833|Arknights|10
+834|Uma Musume|10
+835|Steampunk|3
+836|The Boys|10
+837|One Punch Man|10
+838|Ultraman|10
+839|Black Clover|10
+840|Danmachi|10
+841|Daily Intelligence|11
+842|Simultaneous Transmigration|1
+843|Kamen Rider|10
+844|Nasuverse|10
+845|Versatile Mage|10
+846|Adapted to Donghua|10
+847|Highschool DxD|10
+848|Furry Relationship|5
+849|Immortal Protagonist|1
+850|Toaru|10
+851|Digimon|10
+852|The Walking Dead|10
+853|Lord of the Ring|10
+854|Classroom of the Elite|10
+855|Stand User|2
+856|Resident Evil|10
+857|Touhou Project|10
+858|Project Moon|10
+859|JoJo’s Bizarre Adventure|10
+860|Machinist|8
+861|Qing Transmigration|10
+862|Kirkmanverse|10
+863|Pirates of Caribbean|10
+864|King's Avatar|10
+865|Hikigaya|10
+866|Strike the Blood|10
+867|Zenless Zone Zero|10
+868|Fabulous Beast|10
+869|The Eminence in Shadow|10
+870|Slay the Gods|10
+871|Behind-the-Scenes Mastermind|1
+872|Final Fantasy|10
+873|1900s|3
+874|1910s|3
+875|1920s|3
+876|1930s|3
+877|1940s|3
+878|1950s|3
+879|1960s|3
+880|1970s|3
+881|1980s|3
+882|1990s|3
+883|2000s|3
+884|2010s|3
+885|Blue Archive|10
+886|Food Wars!|10
+887|Dragon Raja|10
+888|Monster Hunter|10
+889|Honkai Star Rails|10
+890|System Misunderstanding|2
 ]==]
 
 local ALL_TAGS = {}
 do
     for line in TAG_SEARCH_INDEX:gmatch("[^\n]+") do
-        local id, label = line:match("^([^|]+)|(.+)$")
-        if id and label then
-            ALL_TAGS[#ALL_TAGS + 1] = { id = id, label = label:lower() }
+        local id, label, cat = line:match("^([^|]+)|([^|]+)|([^|]+)$")
+        if id and label and cat then
+            ALL_TAGS[#ALL_TAGS + 1] = { id = id, label = label, lower = label:lower(), cat = cat }
         end
     end
 end
 
 -- Resolve a free-text Tag Search field to a dedup'd list of tag IDs.
--- Tokens are split on comma, semicolon, newline, tab, or any run
--- of whitespace. Each token is matched case-insensitively as a
--- substring of every tag label; if the token itself is a numeric
--- tag id it is also accepted verbatim. Returned ids are unique.
-function tagSearchResolve(text)
+-- v1.1.9 semantics (site-autocomplete-like feedback). On problems the
+-- resolver RAISES an error whose message shows the matching tag names:
+--   • Tokens are split on comma / semicolon / newline / tab; spaces stay
+--     INSIDE tokens so multi-word phrases work ("weak to strong").
+--   • Per token, resolution order:
+--       1. exact label match (case-insensitive) — "system" → the System
+--          tag even though other labels contain it;
+--       2. numeric token — a verbatim tag id (validated);
+--       3. exactly ONE substring match — "vampir" → Vampires (#740);
+--       4. several substring matches — AMBIGUOUS: raises an error that
+--          LISTS the matching tags (type "sys" → the error shows
+--          System (#696), System Misunderstanding (#890)) — the on-site
+--          autocomplete equivalent; then type the full name, or
+--       5. "keyword*" wildcard — includes ALL substring matches.
+--   • A multi-word token with no phrase match falls back to per-word
+--     matching; a token with no match at all raises a clear error.
+--   • cat: "0"/nil = all categories, else a single category id ("1".."11")
+--     — scopes the whole resolution (mirrors the site finder's grouping).
+function tagSearchResolve(text, cat)
     if not text or text == "" then return {} end
+    local catFilter = tostring(cat or "0")
+    local scopeAll = (catFilter == "0" or catFilter == "" or catFilter == "all")
     local lower = text:lower()
     local seen = {}
     local out = {}
-    -- gmatch with a single-char-but-greedy alternation: comma,
-    -- semicolon, newline, tab, or any run of spaces (any unicode
-    -- whitespace would be nicer but Lua's %s is ASCII-only).
-    for token in lower:gmatch("[^,;\n\t ]+") do
-        if token ~= "" then
+
+    local function scoped(t)
+        return scopeAll or t.cat == catFilter
+    end
+
+    -- every tag whose label contains `token` (plain substring, no patterns)
+    local function substringMatches(token)
+        local matches = {}
+        for _, t in ipairs(ALL_TAGS) do
+            if scoped(t) and t.lower:find(token, 1, true) then
+                matches[#matches + 1] = t
+            end
+        end
+        return matches
+    end
+
+    local function addTag(t)
+        if not seen[t.id] then
+            seen[t.id] = true
+            out[#out + 1] = t.id
+        end
+    end
+
+    local function formatMatches(matches, maxN)
+        local names = {}
+        for i = 1, math.min(#matches, maxN) do
+            names[#names + 1] = matches[i].label .. " (#" .. matches[i].id .. ")"
+        end
+        local s = table.concat(names, ", ")
+        if #matches > maxN then
+            s = s .. ", …and " .. (#matches - maxN) .. " more"
+        end
+        return s
+    end
+
+    -- resolve ONE token (already trimmed + lowercased)
+    local function resolveToken(token)
+        -- 1) exact label match wins (you pick ONE exact tag, like the site)
+        for _, t in ipairs(ALL_TAGS) do
+            if scoped(t) and t.lower == token then
+                addTag(t)
+                return
+            end
+        end
+        -- 2) numeric tag id (validated)
+        if token:match("^%d+$") then
             for _, t in ipairs(ALL_TAGS) do
-                if t.label:find(token, 1, true) or t.id == token then
-                    if not seen[t.id] then
-                        seen[t.id] = true
-                        out[#out + 1] = t.id
+                if t.id == token then
+                    if scoped(t) then
+                        addTag(t)
+                        return
                     end
+                    error("tag id " .. token .. " is not in the selected tag category.")
                 end
             end
+            error("no tag with id " .. token .. ".")
+        end
+        -- 5) trailing-* wildcard: every substring match at once
+        if token:sub(-1) == "*" then
+            local stem = token:sub(1, -2)
+            if stem == "" then return end
+            local matches = substringMatches(stem)
+            if #matches == 0 then
+                error("no tag name contains '" .. stem .. "'.")
+            end
+            for _, t in ipairs(matches) do addTag(t) end
+            return
+        end
+        -- 3) / 4) substring matches
+        local matches = substringMatches(token)
+        if #matches == 1 then
+            addTag(matches[1])
+            return
+        elseif #matches > 1 then
+            error("'" .. token .. "' is ambiguous — it matches " .. #matches
+                .. " tags: " .. formatMatches(matches, 10)
+                .. ". Type the full tag name, add * to include all of them ('"
+                .. token .. "*'), or pick it from the Tags dropdowns.")
+        end
+        -- no match: multi-word tokens fall back to per-word resolution
+        if token:find("%s") then
+            for word in token:gmatch("%S+") do
+                resolveToken(word)
+            end
+            return
+        end
+        error("no tag matches '" .. token .. "'. Try a shorter keyword (e.g. "
+            .. "'reincarnation', 'harem', 'weak to strong'), add * for a wildcard, "
+            .. "or pick from the Tags dropdowns.")
+    end
+
+    for rawToken in lower:gmatch("[^,;\n\t]+") do
+        local token = rawToken:gsub("^%s+", ""):gsub("%s+$", "")
+        if token ~= "" then
+            resolveToken(token)
         end
     end
     return out
@@ -1557,7 +1846,8 @@ end
 
 function getCatalogList(index)
     local page = index + 1
-    local pp = fetchNextData("/en/novel-list.json", "page=" .. tostring(page) .. "&orderBy=reader")
+    local pp = fetchCatalogPage("en/novel-list", "/en/novel-list.json",
+        "page=" .. tostring(page) .. "&orderBy=reader")
     if not pp then
         log_error("wtrlab: getCatalogList failed")
         return { items = {}, hasNext = false }
@@ -1570,7 +1860,7 @@ end
 function getCatalogSearch(index, query)
     local page = index + 1
     local params = "text=" .. url_encode(query) .. "&page=" .. tostring(page)
-    local pp = fetchNextData("/en/novel-finder.json", params)
+    local pp = fetchCatalogPage("en/novel-finder", "/en/novel-finder.json", params)
     if not pp then
         log_error("wtrlab: getCatalogSearch failed")
         return { items = {}, hasNext = false }
@@ -1616,40 +1906,86 @@ function getBookDescription(bookUrl)
     return nil
 end
 
--- NOTE: intentionally NOT using fetchPage — the hash must reflect fresh state
-function getChapterListHash(bookUrl)
-    local r = http_get(bookUrl)
+-- ── Chapter list (shared, TTL-cached api/chapters fetch) ─────────────────────
+-- api/chapters is ~74 KB JSON vs ~250 KB for the book page HTML. Both
+-- getChapterList and getChapterListHash use this ONE fetch through a
+-- 45-second cache: opening a book (hash + list in one burst) costs a
+-- single request, and library refresh checks are ~3x lighter than the
+-- old full-page scrape.
+
+local CHAPTERS_CACHE_TTL_MS = 45000
+
+local function fetchChaptersData(novelId, bookUrl)
+    local entry = _chaptersCache[novelId]
+    local now = nowMs()
+    if entry and (now - entry.t) < CHAPTERS_CACHE_TTL_MS then
+        return entry.chapters
+    end
+    local r = http_get(baseUrl .. "api/chapters/" .. novelId, {
+        headers = {
+            ["Referer"] = bookUrl
+        }
+    })
     if not r.success then
-        return nil
+        log_error("wtrlab: chapters API failed code=" .. tostring(r.code))
+        -- serve a still-warm cache entry past TTL rather than nothing
+        return entry and entry.chapters or nil
     end
-    local chapterCount = nil
-    for _, block in ipairs(html_select(r.body, "div.items-center.text-center")) do
-        local label = html_select_first(block.html, "span[translate='no']")
-        if label and string_trim(label.text) == "Chapters" then
-            -- The block is: <span translate="no">Chapters</span><span translate="no">753</span>
-            -- (both spans carry translate='no', so selecting the first span returns
-            -- the LABEL — extract the number from the block text instead)
-            local m = regex_match(html_text(block.html), "(\\d+)")
-            if m and m[1] then
-                chapterCount = m[1]
-                break
-            end
-        end
+    local data = json_parse(r.body)
+    if not data or not data.chapters then
+        log_error("wtrlab: cannot parse chapters JSON")
+        return entry and entry.chapters or nil
     end
-    -- Combine with the book's serie_data.updated_at timestamp so that a
-    -- re-translation / metadata edit that doesn't change the chapter count
-    -- is still detected as an update. The first "updated_at":"..." in the
-    -- raw HTML is pageProps.serie.serie_data.updated_at (the book's own row,
-    -- serialized before recommendations / other_series / last_chapters).
-    -- Full timestamp (not date-only) so same-day edits are caught.
-    local updatedAt = string.match(r.body, '"updated_at":"([^"]+)"')
-    if not chapterCount and not updatedAt then
-        return nil
-    end
-    return (chapterCount or "?") .. "|" .. (updatedAt or "")
+    _chaptersCache[novelId] = { t = now, chapters = data.chapters }
+    return data.chapters
 end
 
--- ── Chapter list ─────────────────────────────────────────────────────────────
+-- Hash format: "<count>|<max updated_at>|<checksum>" — the count and max
+-- timestamp catch new chapters; the rolling checksum over every chapter's
+-- (order, updated_at) also catches mid-list re-translations that neither
+-- the count nor the max timestamp would see.
+function getChapterListHash(bookUrl)
+    local novelId = string.match(bookUrl, "/novel/(%d+)/")
+    if not novelId then
+        return nil
+    end
+    local chapters = fetchChaptersData(novelId, bookUrl)
+    if not chapters or #chapters == 0 then
+        -- Fallback: the legacy book-page scrape (also covers API hiccups)
+        local r = http_get(bookUrl)
+        if not r.success then
+            return nil
+        end
+        local chapterCount = nil
+        for _, block in ipairs(html_select(r.body, "div.items-center.text-center")) do
+            local label = html_select_first(block.html, "span[translate='no']")
+            if label and string_trim(label.text) == "Chapters" then
+                local m = regex_match(html_text(block.html), "(\\d+)")
+                if m and m[1] then
+                    chapterCount = m[1]
+                    break
+                end
+            end
+        end
+        local updatedAt = string.match(r.body, '"updated_at":"([^"]+)"')
+        if not chapterCount and not updatedAt then
+            return nil
+        end
+        return (chapterCount or "?") .. "|" .. (updatedAt or "")
+    end
+
+    local maxUpd, sum = "", 0
+    for i = 1, #chapters do
+        local ch = chapters[i]
+        local u = tostring(ch.updated_at or "")
+        if u > maxUpd then maxUpd = u end
+        local s = tostring(ch.order or i) .. ":" .. u
+        for j = 1, #s do
+            sum = (sum * 31 + string.byte(s, j)) % 1000000007
+        end
+    end
+    return tostring(#chapters) .. "|" .. maxUpd .. "|" .. tostring(sum)
+end
 
 function getChapterList(bookUrl)
     local novelId = string.match(bookUrl, "/novel/(%d+)/")
@@ -1663,37 +1999,25 @@ function getChapterList(bookUrl)
         return {}
     end
 
-    local apiUrl = baseUrl .. "api/chapters/" .. novelId
-    local r = http_get(apiUrl, {
-        headers = {
-            ["Referer"] = bookUrl
-        }
-    })
-    if not r.success then
-        log_error("wtrlab: chapters API failed code=" .. tostring(r.code))
+    local chapters = fetchChaptersData(novelId, bookUrl)
+    if not chapters then
         return {}
     end
 
-    local data = json_parse(r.body)
-    if not data or not data.chapters then
-        log_error("wtrlab: cannot parse chapters JSON")
-        return {}
-    end
-
-    local chapters = {}
-    for i = 1, #data.chapters do
-        local ch = data.chapters[i]
+    local out = {}
+    for i = 1, #chapters do
+        local ch = chapters[i]
         local order = ch.order or i
         local title = ch.title or ("Chapter " .. tostring(order))
         local chUrl = baseUrl .. "novel/" .. novelId .. "/" .. slug .. "/chapter-" .. tostring(order)
-        table.insert(chapters, {
+        table.insert(out, {
             title = tostring(order) .. ": " .. title,
             url = chUrl
         })
     end
 
-    log_info("wtrlab: loaded " .. tostring(#chapters) .. " chapters for novelId=" .. novelId)
-    return chapters
+    log_info("wtrlab: loaded " .. tostring(#out) .. " chapters for novelId=" .. novelId)
+    return out
 end
 
 -- ── Chapter text ─────────────────────────────────────────────────────────────
@@ -1798,8 +2122,13 @@ local function fetchChapterJson(novelId, chapterNo, chapterUrl, translateParam)
             lastTurnstileCount = json.count
             if attempt < MAX_ATTEMPTS then
                 -- The block is enforced per backend instance and is intermittent:
-                -- a short backoff often lands on a healthy instance.
-                local waitMs = 2500 * attempt
+                -- a retry often lands on a healthy instance. The app-level
+                -- counter only resets via a solved Turnstile challenge, so a
+                -- LONG sleep never aids recovery — it only stalls the read.
+                -- Keep the waits short (600ms / 1800ms; was 2500/5000 in
+                -- 1.1.7, which stacked up to 7.5s of dead time — the
+                -- "chapter takes 10 seconds" symptom).
+                local waitMs = 600 * attempt * attempt
                 log_info("wtrlab: site security check (count=" .. tostring(json.count) ..
                     "), retry " .. attempt .. "/" .. tostring(MAX_ATTEMPTS - 1) .. " in " .. waitMs .. "ms")
                 sleep(waitMs)
@@ -1919,8 +2248,12 @@ function getChapterText(html, chapterUrl)
                             termByOriginal[original] = translations[1]
                         end
                     end
-                    termCache[novelId] = { termByOriginal = termByOriginal }
                 end
+                -- Cache the NEGATIVE result too: a 200 response with no
+                -- usable glossary is stable for the book — without this,
+                -- 1.1.7 re-downloaded the terms file on EVERY chapter of
+                -- every glossary-less book (one wasted request per chapter).
+                termCache[novelId] = { termByOriginal = termByOriginal }
             end
         end
     end
@@ -2061,6 +2394,16 @@ end
 
 function getFilterList()
     return {
+        -- ── Novel finder: title text ──────────────────────────────────────
+        -- The app's global search bar carries no filters, so the site's
+        -- novel-finder text box lives HERE: combine a title keyword with
+        -- every filter below in one applied query (finder API text= param).
+        {
+            type = "text",
+            key = "title_search",
+            label = "Title Search (novel finder)",
+            defaultValue = ""
+        },
         {
             type = "select",
             key = "orderBy",
@@ -2256,6 +2599,48 @@ function getFilterList()
                 {value = "40", label = "Yuri"},
             }
         },
+        -- ── Tag Search (keywords) + visible Tag pickers (v1.1.9) ──────────
+        -- Two keyword fields (below) + one dropdown per site category
+        -- (after Tag And/Or). Keywords resolve at apply time with
+        -- autocomplete-like feedback: an ambiguous or unknown keyword
+        -- raises an error that LISTS the matching tag names, so typos
+        -- never silently filter nothing and short prefixes ("sys")
+        -- show you the real tag names ("System"). "keyword*" includes
+        -- every matching tag; multi-word phrases match as phrases.
+        -- The category picker scopes the keyword fields; each Tags:
+        -- dropdown lists that category's tags alphabetically.
+        {
+            type = "select",
+            key = "tag_category",
+            label = "Tag Search Category",
+            defaultValue = "0",
+            options = {
+                {value = "0", label = "All Categories"},
+                {value = "1", label = "Protagonist Archetypes"},
+                {value = "2", label = "Power Systems"},
+                {value = "3", label = "Worldbuilding"},
+                {value = "4", label = "Socio-Political Structures"},
+                {value = "5", label = "Relationship Tropes"},
+                {value = "6", label = "Narrative"},
+                {value = "7", label = "Beings & Factions"},
+                {value = "8", label = "Professional Archetypes"},
+                {value = "9", label = "Tone & Atmosphere"},
+                {value = "10", label = "Adaptations"},
+                {value = "11", label = "Miscellaneous Narrative Elements"}
+            }
+        },
+        {
+            type = "text",
+            key = "tag_search_inc",
+            label = "Tag Search - include (name, id, or name*)",
+            defaultValue = ""
+        },
+        {
+            type = "text",
+            key = "tag_search_exc",
+            label = "Tag Search - exclude (name, id, or name*)",
+            defaultValue = ""
+        },
         {
             type = "select",
             key = "tag_operator",
@@ -2266,411 +2651,1012 @@ function getFilterList()
                 {value = "or", label = "Or"}
             }
         },
-        -- Tag Search (free-text; resolves to tag IDs via tagSearchResolve)
+        -- ── Tag pickers (v1.1.9): one dropdown per site category ──────
+        -- The tags now SHOW UP: each picker lists its category's tags
+        -- alphabetically (the app sorts options). Pick one tag to
+        -- include it; combine with the Tag Search keyword fields and
+        -- the category-scoped pickers as needed. (Exclude via the
+        -- Tag Search - exclude keyword field.)
+        -- [TAG PICKERS BEGIN]
+        -- cat 1: Protagonist Archetypes (190 tags)
         {
-            type = "text",
-            key = "tag_search_inc",
-            label = "Tag Search (include)",
-            defaultValue = ""
-        },
-        {
-            type = "text",
-            key = "tag_search_exc",
-            label = "Tag Search (exclude)",
-            defaultValue = ""
-        },
--- 11 grouped tag filters (auto-generated by scripts/gen_grouped_tags.py
---  from research/real_tags.json -- 882 tags across 11 site categories).
---  Do not hand-edit; re-run the generator after refreshing real_tags.json.
--- 11 grouped tag filters (auto-generated by scripts/gen_grouped_tags.py
---  from research/real_tags.json -- 882 tags across 11 site categories).
---  Do not hand-edit; re-run the generator after refreshing real_tags.json.
-        {
-            type = "tristate",
-            key = "tags_protagonist",
-            label = "Protagonist Archetypes (190)",
+            type = "select",
+            key = "tag_pick_1",
+            label = "Tags: Protagonist Archetypes (190)",
+            defaultValue = "",
             options = {
-                {value = "1", label = "Abandoned Children"}, {value = "3", label = "Absent Parents"}, {value = "6", label = "Accelerated Growth"},
-                {value = "19", label = "Adopted Children"}, {value = "20", label = "Adopted Protagonist"}, {value = "24", label = "Age Progression"},
-                {value = "25", label = "Age Regression"}, {value = "26", label = "Aggressive Characters"}, {value = "36", label = "Androgynous Characters"},
-                {value = "42", label = "Anti-social Protagonist"}, {value = "43", label = "Antihero Protagonist"}, {value = "46", label = "Apathetic Protagonist"},
-                {value = "49", label = "Appearance Different from Actual Age"}, {value = "56", label = "Arrogant Characters"}, {value = "63", label = "Autism"},
-                {value = "65", label = "Average-looking Protagonist"}, {value = "67", label = "Awkward Protagonist"}, {value = "81", label = "Beautiful Female Lead"},
-                {value = "871", label = "Behind-the-Scenes Mastermind"}, {value = "86", label = "Bisexual Protagonist"}, {value = "87", label = "Black Belly"},
-                {value = "91", label = "Blind Protagonist"}, {value = "99", label = "Bookworm"}, {value = "111", label = "Calm Protagonist"},
-                {value = "114", label = "Carefree Protagonist"}, {value = "115", label = "Caring Protagonist"}, {value = "116", label = "Cautious Protagonist"},
-                {value = "118", label = "Character Growth"}, {value = "119", label = "Charismatic Protagonist"}, {value = "120", label = "Charming Protagonist"},
-                {value = "125", label = "Child Protagonist"}, {value = "130", label = "Childish Protagonist"}, {value = "131", label = "Chuunibyou"},
-                {value = "134", label = "Clever Protagonist"}, {value = "142", label = "Cold Protagonist"}, {value = "145", label = "Coma"},
-                {value = "147", label = "Coming of Age"}, {value = "150", label = "Confident Protagonist"}, {value = "158", label = "Couple Growth"},
-                {value = "161", label = "Cowardly Protagonist"}, {value = "165", label = "Cross-dressing"}, {value = "171", label = "Cunning Protagonist"},
-                {value = "172", label = "Curious Protagonist"}, {value = "175", label = "Cute Protagonist"}, {value = "182", label = "Dead Protagonist"},
-                {value = "186", label = "Delinquents"}, {value = "192", label = "Dense Protagonist"}, {value = "197", label = "Determined Protagonist"},
-                {value = "200", label = "Disabilities"}, {value = "203", label = "Dishonest Protagonist"}, {value = "204", label = "Distrustful Protagonist"},
-                {value = "212", label = "Doting Older Siblings"}, {value = "213", label = "Doting Parents"}, {value = "231", label = "Elderly Protagonist"},
-                {value = "234", label = "Emotionally Weak Protagonist"}, {value = "240", label = "Enlightenment"}, {value = "246", label = "Evil Protagonist"},
-                {value = "248", label = "Evolution"}, {value = "254", label = "Fallen Nobility"}, {value = "260", label = "Famous Parents"},
-                {value = "261", label = "Famous Protagonist"}, {value = "268", label = "Fast Learner"}, {value = "269", label = "Fat Protagonist"},
-                {value = "270", label = "Fat to Fit"}, {value = "272", label = "Fearless Protagonist"}, {value = "275", label = "Female Protagonist"},
-                {value = "276", label = "Female to Male"}, {value = "287", label = "Forgetful Protagonist"}, {value = "288", label = "Former Hero"},
-                {value = "292", label = "Fujoshi"}, {value = "302", label = "Genderless Protagonist"}, {value = "306", label = "Genius Protagonist"},
-                {value = "310", label = "Glasses-wearing Protagonist"}, {value = "312", label = "God Protagonist"}, {value = "325", label = "Half-human Protagonist"},
-                {value = "327", label = "Handsome Male Lead"}, {value = "328", label = "Hard-Working Protagonist"}, {value = "330", label = "Harsh Training"},
-                {value = "331", label = "Hated Protagonist"}, {value = "803", label = "Heaven Defying Comprehension"}, {value = "337", label = "Helpful Protagonist"},
-                {value = "342", label = "Hiding True Abilities"}, {value = "343", label = "Hiding True Identity"}, {value = "344", label = "Hikikomori"},
-                {value = "346", label = "Honest Protagonist"}, {value = "348", label = "Hot-blooded Protagonist"}, {value = "350", label = "Human Weapon"},
-                {value = "352", label = "Humanoid Protagonist"}, {value = "849", label = "Immortal Protagonist"}, {value = "361", label = "Indecisive Protagonist"},
-                {value = "363", label = "Inferiority Complex"}, {value = "369", label = "Introverted Protagonist"}, {value = "375", label = "Jobless Class"},
-                {value = "382", label = "Kuudere"}, {value = "383", label = "Lack of Common Sense"}, {value = "387", label = "Lazy Protagonist"},
-                {value = "392", label = "Limited Lifespan"}, {value = "395", label = "Loli"}, {value = "397", label = "Loner Protagonist"},
-                {value = "407", label = "Low-key Protagonist"}, {value = "409", label = "Lucky Protagonist"}, {value = "417", label = "Male Protagonist"},
-                {value = "418", label = "Male to Female"}, {value = "422", label = "Manipulative Characters"}, {value = "427", label = "Masochistic Characters"},
-                {value = "432", label = "Mature Protagonist"}, {value = "444", label = "Mob Protagonist"}, {value = "447", label = "Modern Knowledge"},
-                {value = "456", label = "Multiple Personalities"}, {value = "458", label = "Multiple Protagonists"}, {value = "467", label = "Mute Character"},
-                {value = "468", label = "Mysterious Family Background"}, {value = "474", label = "Naive Protagonist"}, {value = "475", label = "Narcissistic Protagonist"},
-                {value = "477", label = "Near-Death Experience"}, {value = "479", label = "Neet"}, {value = "486", label = "Non-humanoid Protagonist"},
-                {value = "500", label = "Orphans"}, {value = "503", label = "Outcasts"}, {value = "506", label = "Overpowered Protagonist"},
-                {value = "508", label = "Pacifist Protagonist"}, {value = "516", label = "Past Trauma"}, {value = "518", label = "Personality Changes"},
-                {value = "519", label = "Perverted Protagonist"}, {value = "530", label = "Playboys"}, {value = "531", label = "Playful Protagonist"},
-                {value = "535", label = "Polite Protagonist"}, {value = "539", label = "Poor Protagonist"}, {value = "547", label = "Pragmatic Protagonist"},
-                {value = "551", label = "Previous Life Talent"}, {value = "555", label = "Proactive Protagonist"}, {value = "560", label = "Protagonist Strong from the Start"},
-                {value = "563", label = "Psychopaths"}, {value = "565", label = "Quiet Characters"}, {value = "566", label = "Quirky Characters"},
-                {value = "569", label = "Race Change"}, {value = "829", label = "Reborn"}, {value = "831", label = "Reborn as the Villain"},
-                {value = "574", label = "Reincarnated as a Monster"}, {value = "575", label = "Reincarnated as an Object"}, {value = "577", label = "Reincarnated in Another World"},
-                {value = "578", label = "Reincarnation"}, {value = "580", label = "Reluctant Protagonist"}, {value = "584", label = "Returning from Another World"},
-                {value = "590", label = "Righteous Protagonist"}, {value = "595", label = "Ruthless Protagonist"}, {value = "596", label = "Sadistic Characters"},
-                {value = "598", label = "Salaryman"}, {value = "602", label = "Schizophrenia"}, {value = "605", label = "Sealed Power"},
-                {value = "606", label = "Second Chance"}, {value = "611", label = "Secretive Protagonist"}, {value = "616", label = "Selfish Protagonist"},
-                {value = "617", label = "Selfless Protagonist"}, {value = "618", label = "Seme Protagonist"}, {value = "621", label = "Sentimental Protagonist"},
-                {value = "630", label = "Shameless Protagonist"}, {value = "633", label = "Sharp-tongued Characters"}, {value = "637", label = "Shota"},
-                {value = "641", label = "Shy Characters"}, {value = "842", label = "Simultaneous Transmigration"}, {value = "651", label = "Skill Assimilation"},
-                {value = "653", label = "Skill Creation"}, {value = "655", label = "Slave Protagonist"}, {value = "658", label = "Slow Growth at Start"},
-                {value = "674", label = "Stoic Characters"}, {value = "676", label = "Straight Seme"}, {value = "677", label = "Straight Uke"},
-                {value = "682", label = "Strong to Stronger"}, {value = "683", label = "Stubborn Protagonist"}, {value = "687", label = "Sudden Strength Gain"},
-                {value = "690", label = "Summoned Hero"}, {value = "711", label = "Timid Protagonist"}, {value = "712", label = "Tomboyish Female Lead"},
-                {value = "715", label = "Tragic Past"}, {value = "717", label = "Transmigration"}, {value = "718", label = "Transplanted Memories"},
-                {value = "719", label = "Transported into a Game World"}, {value = "721", label = "Transported to Another World"}, {value = "722", label = "Trap"},
-                {value = "724", label = "Trickster"}, {value = "727", label = "Twisted Personality"}, {value = "728", label = "Ugly Protagonist"},
-                {value = "810", label = "Undead Protagonist"}, {value = "731", label = "Underestimated Protagonist"}, {value = "736", label = "Unlucky Protagonist"},
-                {value = "737", label = "Unreliable Narrator"}, {value = "741", label = "Villainess Noble Girls"}, {value = "749", label = "Weak Protagonist"},
+                {value = "", label = "Any"},
+                {value = "1", label = "Abandoned Children"},
+                {value = "3", label = "Absent Parents"},
+                {value = "6", label = "Accelerated Growth"},
+                {value = "19", label = "Adopted Children"},
+                {value = "20", label = "Adopted Protagonist"},
+                {value = "24", label = "Age Progression"},
+                {value = "25", label = "Age Regression"},
+                {value = "26", label = "Aggressive Characters"},
+                {value = "36", label = "Androgynous Characters"},
+                {value = "42", label = "Anti-social Protagonist"},
+                {value = "43", label = "Antihero Protagonist"},
+                {value = "46", label = "Apathetic Protagonist"},
+                {value = "49", label = "Appearance Different from Actual Age"},
+                {value = "56", label = "Arrogant Characters"},
+                {value = "63", label = "Autism"},
+                {value = "65", label = "Average-looking Protagonist"},
+                {value = "67", label = "Awkward Protagonist"},
+                {value = "81", label = "Beautiful Female Lead"},
+                {value = "871", label = "Behind-the-Scenes Mastermind"},
+                {value = "86", label = "Bisexual Protagonist"},
+                {value = "87", label = "Black Belly"},
+                {value = "91", label = "Blind Protagonist"},
+                {value = "99", label = "Bookworm"},
+                {value = "111", label = "Calm Protagonist"},
+                {value = "114", label = "Carefree Protagonist"},
+                {value = "115", label = "Caring Protagonist"},
+                {value = "116", label = "Cautious Protagonist"},
+                {value = "118", label = "Character Growth"},
+                {value = "119", label = "Charismatic Protagonist"},
+                {value = "120", label = "Charming Protagonist"},
+                {value = "125", label = "Child Protagonist"},
+                {value = "130", label = "Childish Protagonist"},
+                {value = "131", label = "Chuunibyou"},
+                {value = "134", label = "Clever Protagonist"},
+                {value = "142", label = "Cold Protagonist"},
+                {value = "145", label = "Coma"},
+                {value = "147", label = "Coming of Age"},
+                {value = "150", label = "Confident Protagonist"},
+                {value = "158", label = "Couple Growth"},
+                {value = "161", label = "Cowardly Protagonist"},
+                {value = "165", label = "Cross-dressing"},
+                {value = "171", label = "Cunning Protagonist"},
+                {value = "172", label = "Curious Protagonist"},
+                {value = "175", label = "Cute Protagonist"},
+                {value = "182", label = "Dead Protagonist"},
+                {value = "186", label = "Delinquents"},
+                {value = "192", label = "Dense Protagonist"},
+                {value = "197", label = "Determined Protagonist"},
+                {value = "200", label = "Disabilities"},
+                {value = "203", label = "Dishonest Protagonist"},
+                {value = "204", label = "Distrustful Protagonist"},
+                {value = "212", label = "Doting Older Siblings"},
+                {value = "213", label = "Doting Parents"},
+                {value = "231", label = "Elderly Protagonist"},
+                {value = "234", label = "Emotionally Weak Protagonist"},
+                {value = "240", label = "Enlightenment"},
+                {value = "246", label = "Evil Protagonist"},
+                {value = "248", label = "Evolution"},
+                {value = "254", label = "Fallen Nobility"},
+                {value = "260", label = "Famous Parents"},
+                {value = "261", label = "Famous Protagonist"},
+                {value = "268", label = "Fast Learner"},
+                {value = "269", label = "Fat Protagonist"},
+                {value = "270", label = "Fat to Fit"},
+                {value = "272", label = "Fearless Protagonist"},
+                {value = "275", label = "Female Protagonist"},
+                {value = "276", label = "Female to Male"},
+                {value = "287", label = "Forgetful Protagonist"},
+                {value = "288", label = "Former Hero"},
+                {value = "292", label = "Fujoshi"},
+                {value = "302", label = "Genderless Protagonist"},
+                {value = "306", label = "Genius Protagonist"},
+                {value = "310", label = "Glasses-wearing Protagonist"},
+                {value = "312", label = "God Protagonist"},
+                {value = "325", label = "Half-human Protagonist"},
+                {value = "327", label = "Handsome Male Lead"},
+                {value = "328", label = "Hard-Working Protagonist"},
+                {value = "330", label = "Harsh Training"},
+                {value = "331", label = "Hated Protagonist"},
+                {value = "803", label = "Heaven Defying Comprehension"},
+                {value = "337", label = "Helpful Protagonist"},
+                {value = "342", label = "Hiding True Abilities"},
+                {value = "343", label = "Hiding True Identity"},
+                {value = "344", label = "Hikikomori"},
+                {value = "346", label = "Honest Protagonist"},
+                {value = "348", label = "Hot-blooded Protagonist"},
+                {value = "350", label = "Human Weapon"},
+                {value = "352", label = "Humanoid Protagonist"},
+                {value = "849", label = "Immortal Protagonist"},
+                {value = "361", label = "Indecisive Protagonist"},
+                {value = "363", label = "Inferiority Complex"},
+                {value = "369", label = "Introverted Protagonist"},
+                {value = "375", label = "Jobless Class"},
+                {value = "382", label = "Kuudere"},
+                {value = "383", label = "Lack of Common Sense"},
+                {value = "387", label = "Lazy Protagonist"},
+                {value = "392", label = "Limited Lifespan"},
+                {value = "395", label = "Loli"},
+                {value = "397", label = "Loner Protagonist"},
+                {value = "407", label = "Low-key Protagonist"},
+                {value = "409", label = "Lucky Protagonist"},
+                {value = "417", label = "Male Protagonist"},
+                {value = "418", label = "Male to Female"},
+                {value = "422", label = "Manipulative Characters"},
+                {value = "427", label = "Masochistic Characters"},
+                {value = "432", label = "Mature Protagonist"},
+                {value = "444", label = "Mob Protagonist"},
+                {value = "447", label = "Modern Knowledge"},
+                {value = "456", label = "Multiple Personalities"},
+                {value = "458", label = "Multiple Protagonists"},
+                {value = "467", label = "Mute Character"},
+                {value = "468", label = "Mysterious Family Background"},
+                {value = "474", label = "Naive Protagonist"},
+                {value = "475", label = "Narcissistic Protagonist"},
+                {value = "477", label = "Near-Death Experience"},
+                {value = "479", label = "Neet"},
+                {value = "486", label = "Non-humanoid Protagonist"},
+                {value = "500", label = "Orphans"},
+                {value = "503", label = "Outcasts"},
+                {value = "506", label = "Overpowered Protagonist"},
+                {value = "508", label = "Pacifist Protagonist"},
+                {value = "516", label = "Past Trauma"},
+                {value = "518", label = "Personality Changes"},
+                {value = "519", label = "Perverted Protagonist"},
+                {value = "530", label = "Playboys"},
+                {value = "531", label = "Playful Protagonist"},
+                {value = "535", label = "Polite Protagonist"},
+                {value = "539", label = "Poor Protagonist"},
+                {value = "547", label = "Pragmatic Protagonist"},
+                {value = "551", label = "Previous Life Talent"},
+                {value = "555", label = "Proactive Protagonist"},
+                {value = "560", label = "Protagonist Strong from the Start"},
+                {value = "563", label = "Psychopaths"},
+                {value = "565", label = "Quiet Characters"},
+                {value = "566", label = "Quirky Characters"},
+                {value = "569", label = "Race Change"},
+                {value = "829", label = "Reborn"},
+                {value = "831", label = "Reborn as the Villain"},
+                {value = "574", label = "Reincarnated as a Monster"},
+                {value = "575", label = "Reincarnated as an Object"},
+                {value = "577", label = "Reincarnated in Another World"},
+                {value = "578", label = "Reincarnation"},
+                {value = "580", label = "Reluctant Protagonist"},
+                {value = "584", label = "Returning from Another World"},
+                {value = "590", label = "Righteous Protagonist"},
+                {value = "595", label = "Ruthless Protagonist"},
+                {value = "596", label = "Sadistic Characters"},
+                {value = "598", label = "Salaryman"},
+                {value = "602", label = "Schizophrenia"},
+                {value = "605", label = "Sealed Power"},
+                {value = "606", label = "Second Chance"},
+                {value = "611", label = "Secretive Protagonist"},
+                {value = "616", label = "Selfish Protagonist"},
+                {value = "617", label = "Selfless Protagonist"},
+                {value = "618", label = "Seme Protagonist"},
+                {value = "621", label = "Sentimental Protagonist"},
+                {value = "630", label = "Shameless Protagonist"},
+                {value = "633", label = "Sharp-tongued Characters"},
+                {value = "637", label = "Shota"},
+                {value = "641", label = "Shy Characters"},
+                {value = "842", label = "Simultaneous Transmigration"},
+                {value = "651", label = "Skill Assimilation"},
+                {value = "653", label = "Skill Creation"},
+                {value = "655", label = "Slave Protagonist"},
+                {value = "658", label = "Slow Growth at Start"},
+                {value = "674", label = "Stoic Characters"},
+                {value = "676", label = "Straight Seme"},
+                {value = "677", label = "Straight Uke"},
+                {value = "682", label = "Strong to Stronger"},
+                {value = "683", label = "Stubborn Protagonist"},
+                {value = "687", label = "Sudden Strength Gain"},
+                {value = "690", label = "Summoned Hero"},
+                {value = "711", label = "Timid Protagonist"},
+                {value = "712", label = "Tomboyish Female Lead"},
+                {value = "715", label = "Tragic Past"},
+                {value = "717", label = "Transmigration"},
+                {value = "718", label = "Transplanted Memories"},
+                {value = "719", label = "Transported into a Game World"},
+                {value = "721", label = "Transported to Another World"},
+                {value = "722", label = "Trap"},
+                {value = "724", label = "Trickster"},
+                {value = "727", label = "Twisted Personality"},
+                {value = "728", label = "Ugly Protagonist"},
+                {value = "810", label = "Undead Protagonist"},
+                {value = "731", label = "Underestimated Protagonist"},
+                {value = "736", label = "Unlucky Protagonist"},
+                {value = "737", label = "Unreliable Narrator"},
+                {value = "741", label = "Villainess Noble Girls"},
+                {value = "749", label = "Weak Protagonist"},
                 {value = "750", label = "Weak to Strong"},
             }
         },
-
+        -- cat 2: Power Systems (100 tags)
         {
-            type = "tristate",
-            key = "tags_power_systems",
-            label = "Power Systems (99)",
+            type = "select",
+            key = "tag_pick_2",
+            label = "Tags: Power Systems (100)",
+            defaultValue = "",
             options = {
-                {value = "2", label = "Ability Steal"}, {value = "27", label = "Alchemy"}, {value = "37", label = "Androids"},
-                {value = "41", label = "Anti-Magic"}, {value = "48", label = "Appearance Changes"}, {value = "822", label = "Array"},
-                {value = "59", label = "Artificial Intelligence"}, {value = "64", label = "Automatons"}, {value = "85", label = "Biochip"},
-                {value = "92", label = "Blood Manipulation"}, {value = "93", label = "Bloodlines"}, {value = "94", label = "Body Swap"},
-                {value = "95", label = "Body Tempering"}, {value = "101", label = "Brainwashing"}, {value = "122", label = "Cheats"},
-                {value = "827", label = "Class Awakening"}, {value = "136", label = "Clones"}, {value = "149", label = "Conditional Power"},
-                {value = "807", label = "Copy"}, {value = "168", label = "Cryostasis"}, {value = "169", label = "Cultivation"},
-                {value = "173", label = "Curses"}, {value = "178", label = "Dao Companion"}, {value = "179", label = "Dao Comprehension"},
-                {value = "190", label = "Demonic Cultivation Technique"}, {value = "797", label = "Devouring"}, {value = "205", label = "Divination"},
-                {value = "206", label = "Divine Protection"}, {value = "220", label = "Dungeon Master"}, {value = "230", label = "Eidetic Memory"},
-                {value = "232", label = "Elemental Magic"}, {value = "250", label = "Exorcism"}, {value = "251", label = "Eye Powers"},
-                {value = "808", label = "Faith Dependent Deities"}, {value = "267", label = "Fast Cultivation"}, {value = "278", label = "Firearms"},
-                {value = "295", label = "Galge"}, {value = "784", label = "Game Creator"}, {value = "297", label = "Game Elements"},
-                {value = "298", label = "Game Ranking System"}, {value = "781", label = "Gao Wu"}, {value = "304", label = "Genetic Modifications"},
-                {value = "305", label = "Genies"}, {value = "315", label = "Godly Powers"}, {value = "320", label = "Grinding"},
-                {value = "332", label = "Healers"}, {value = "335", label = "Heavenly Tribulation"}, {value = "341", label = "Hidden Abilities"},
-                {value = "354", label = "Hypnotism"}, {value = "365", label = "Inscriptions"}, {value = "371", label = "Invisibility"},
-                {value = "390", label = "Level System"}, {value = "401", label = "Lottery"}, {value = "410", label = "Magic"},
-                {value = "412", label = "Magic Formations"}, {value = "413", label = "Magical Girls"}, {value = "414", label = "Magical Space"},
-                {value = "415", label = "Magical Technology"}, {value = "426", label = "Martial Spirits"}, {value = "439", label = "Mind Control"},
-                {value = "443", label = "MMORPG"}, {value = "792", label = "Mortal Flow"}, {value = "478", label = "Necromancer"},
-                {value = "496", label = "Onmyouji"}, {value = "502", label = "Otome Game"}, {value = "511", label = "Parasites"},
-                {value = "526", label = "Pill Based Cultivation"}, {value = "527", label = "Pill Concocting"}, {value = "542", label = "Possession"},
-                {value = "548", label = "Precognition"}, {value = "793", label = "Proficiency"}, {value = "561", label = "Protagonist with Multiple Bodies"},
-                {value = "562", label = "Psychic Powers"}, {value = "830", label = "Reality-Game Fusion"}, {value = "576", label = "Reincarnated in a Game World"},
-                {value = "583", label = "Resurrection"}, {value = "615", label = "Seeing Things Other Humans Can't"}, {value = "629", label = "Sexual Cultivation Technique"},
-                {value = "631", label = "Shapeshifters"}, {value = "632", label = "Sharing A Body"}, {value = "811", label = "Sign In"},
-                {value = "786", label = "Simulator"}, {value = "652", label = "Skill Books"}, {value = "663", label = "Soul Power"},
-                {value = "665", label = "Spatial Manipulation"}, {value = "667", label = "Special Abilities"}, {value = "670", label = "Spirit Users"},
-                {value = "855", label = "Stand User"}, {value = "691", label = "Summoning Magic"}, {value = "693", label = "Survival Game"},
-                {value = "694", label = "Sword And Magic"}, {value = "696", label = "System"}, {value = "707", label = "Time Manipulation"},
-                {value = "716", label = "Transformation Ability"}, {value = "732", label = "Unique Cultivation Technique"}, {value = "735", label = "Unlimited Flow"},
-                {value = "742", label = "Virtual Reality"}, {value = "753", label = "Wishes"}, {value = "755", label = "Wizards"},
+                {value = "", label = "Any"},
+                {value = "2", label = "Ability Steal"},
+                {value = "27", label = "Alchemy"},
+                {value = "37", label = "Androids"},
+                {value = "41", label = "Anti-Magic"},
+                {value = "48", label = "Appearance Changes"},
+                {value = "822", label = "Array"},
+                {value = "59", label = "Artificial Intelligence"},
+                {value = "64", label = "Automatons"},
+                {value = "85", label = "Biochip"},
+                {value = "92", label = "Blood Manipulation"},
+                {value = "93", label = "Bloodlines"},
+                {value = "94", label = "Body Swap"},
+                {value = "95", label = "Body Tempering"},
+                {value = "101", label = "Brainwashing"},
+                {value = "122", label = "Cheats"},
+                {value = "827", label = "Class Awakening"},
+                {value = "136", label = "Clones"},
+                {value = "149", label = "Conditional Power"},
+                {value = "807", label = "Copy"},
+                {value = "168", label = "Cryostasis"},
+                {value = "169", label = "Cultivation"},
+                {value = "173", label = "Curses"},
+                {value = "178", label = "Dao Companion"},
+                {value = "179", label = "Dao Comprehension"},
+                {value = "190", label = "Demonic Cultivation Technique"},
+                {value = "797", label = "Devouring"},
+                {value = "205", label = "Divination"},
+                {value = "206", label = "Divine Protection"},
+                {value = "220", label = "Dungeon Master"},
+                {value = "230", label = "Eidetic Memory"},
+                {value = "232", label = "Elemental Magic"},
+                {value = "250", label = "Exorcism"},
+                {value = "251", label = "Eye Powers"},
+                {value = "808", label = "Faith Dependent Deities"},
+                {value = "267", label = "Fast Cultivation"},
+                {value = "278", label = "Firearms"},
+                {value = "295", label = "Galge"},
+                {value = "784", label = "Game Creator"},
+                {value = "297", label = "Game Elements"},
+                {value = "298", label = "Game Ranking System"},
+                {value = "781", label = "Gao Wu"},
+                {value = "304", label = "Genetic Modifications"},
+                {value = "305", label = "Genies"},
+                {value = "315", label = "Godly Powers"},
+                {value = "320", label = "Grinding"},
+                {value = "332", label = "Healers"},
+                {value = "335", label = "Heavenly Tribulation"},
+                {value = "341", label = "Hidden Abilities"},
+                {value = "354", label = "Hypnotism"},
+                {value = "365", label = "Inscriptions"},
+                {value = "371", label = "Invisibility"},
+                {value = "390", label = "Level System"},
+                {value = "401", label = "Lottery"},
+                {value = "410", label = "Magic"},
+                {value = "412", label = "Magic Formations"},
+                {value = "413", label = "Magical Girls"},
+                {value = "414", label = "Magical Space"},
+                {value = "415", label = "Magical Technology"},
+                {value = "426", label = "Martial Spirits"},
+                {value = "439", label = "Mind Control"},
+                {value = "443", label = "MMORPG"},
+                {value = "792", label = "Mortal Flow"},
+                {value = "478", label = "Necromancer"},
+                {value = "496", label = "Onmyouji"},
+                {value = "502", label = "Otome Game"},
+                {value = "511", label = "Parasites"},
+                {value = "526", label = "Pill Based Cultivation"},
+                {value = "527", label = "Pill Concocting"},
+                {value = "542", label = "Possession"},
+                {value = "548", label = "Precognition"},
+                {value = "793", label = "Proficiency"},
+                {value = "561", label = "Protagonist with Multiple Bodies"},
+                {value = "562", label = "Psychic Powers"},
+                {value = "830", label = "Reality-Game Fusion"},
+                {value = "576", label = "Reincarnated in a Game World"},
+                {value = "583", label = "Resurrection"},
+                {value = "615", label = "Seeing Things Other Humans Can't"},
+                {value = "629", label = "Sexual Cultivation Technique"},
+                {value = "631", label = "Shapeshifters"},
+                {value = "632", label = "Sharing A Body"},
+                {value = "811", label = "Sign In"},
+                {value = "786", label = "Simulator"},
+                {value = "652", label = "Skill Books"},
+                {value = "663", label = "Soul Power"},
+                {value = "665", label = "Spatial Manipulation"},
+                {value = "667", label = "Special Abilities"},
+                {value = "670", label = "Spirit Users"},
+                {value = "855", label = "Stand User"},
+                {value = "691", label = "Summoning Magic"},
+                {value = "693", label = "Survival Game"},
+                {value = "694", label = "Sword And Magic"},
+                {value = "696", label = "System"},
+                {value = "890", label = "System Misunderstanding"},
+                {value = "707", label = "Time Manipulation"},
+                {value = "716", label = "Transformation Ability"},
+                {value = "732", label = "Unique Cultivation Technique"},
+                {value = "735", label = "Unlimited Flow"},
+                {value = "742", label = "Virtual Reality"},
+                {value = "753", label = "Wishes"},
+                {value = "755", label = "Wizards"},
             }
         },
-
+        -- cat 3: Worldbuilding (56 tags)
         {
-            type = "tristate",
-            key = "tags_worldbuilding",
-            label = "Worldbuilding (56)",
+            type = "select",
+            key = "tag_pick_3",
+            label = "Tags: Worldbuilding (56)",
+            defaultValue = "",
             options = {
-                {value = "873", label = "1900s"}, {value = "874", label = "1910s"}, {value = "875", label = "1920s"},
-                {value = "876", label = "1930s"}, {value = "877", label = "1940s"}, {value = "878", label = "1950s"},
-                {value = "879", label = "1960s"}, {value = "880", label = "1970s"}, {value = "881", label = "1980s"},
-                {value = "882", label = "1990s"}, {value = "883", label = "2000s"}, {value = "884", label = "2010s"},
-                {value = "30", label = "Alternate World"}, {value = "32", label = "Amusement Park"}, {value = "34", label = "Ancient China"},
-                {value = "35", label = "Ancient Times"}, {value = "47", label = "Apocalypse"}, {value = "133", label = "Classic"},
-                {value = "221", label = "Dungeons"}, {value = "223", label = "Dystopia"}, {value = "243", label = "European Ambience"},
-                {value = "265", label = "Fantasy World"}, {value = "294", label = "Futuristic Setting"}, {value = "301", label = "Gate to Another World"},
-                {value = "334", label = "Heaven"}, {value = "336", label = "Hell"}, {value = "347", label = "Hospital"},
-                {value = "368", label = "Interdimensional Travel"}, {value = "391", label = "Library"}, {value = "400", label = "Lost Civilizations"},
-                {value = "434", label = "Medieval"}, {value = "446", label = "Modern Day"}, {value = "450", label = "Monster Society"},
-                {value = "454", label = "Mpreg"}, {value = "459", label = "Multiple Realms"}, {value = "460", label = "Multiple Reincarnated Individuals"},
-                {value = "461", label = "Multiple Timelines"}, {value = "462", label = "Multiple Transported Individuals"}, {value = "493", label = "Omegaverse"},
-                {value = "505", label = "Outer Space"}, {value = "510", label = "Parallel Worlds"}, {value = "544", label = "Post-apocalyptic"},
-                {value = "554", label = "Prison"}, {value = "582", label = "Restaurant"}, {value = "828", label = "Spiritual Energy Revival"},
-                {value = "835", label = "Steampunk"}, {value = "699", label = "Technological Gap"}, {value = "795", label = "Three Kingdoms"},
-                {value = "706", label = "Time Loop"}, {value = "708", label = "Time Paradox"}, {value = "710", label = "Time Travel"},
-                {value = "720", label = "Transported Modern Structure"}, {value = "723", label = "Tribal Society"}, {value = "756", label = "World Hopping"},
-                {value = "757", label = "World Travel"}, {value = "758", label = "World Tree"},
+                {value = "", label = "Any"},
+                {value = "873", label = "1900s"},
+                {value = "874", label = "1910s"},
+                {value = "875", label = "1920s"},
+                {value = "876", label = "1930s"},
+                {value = "877", label = "1940s"},
+                {value = "878", label = "1950s"},
+                {value = "879", label = "1960s"},
+                {value = "880", label = "1970s"},
+                {value = "881", label = "1980s"},
+                {value = "882", label = "1990s"},
+                {value = "883", label = "2000s"},
+                {value = "884", label = "2010s"},
+                {value = "30", label = "Alternate World"},
+                {value = "32", label = "Amusement Park"},
+                {value = "34", label = "Ancient China"},
+                {value = "35", label = "Ancient Times"},
+                {value = "47", label = "Apocalypse"},
+                {value = "133", label = "Classic"},
+                {value = "221", label = "Dungeons"},
+                {value = "223", label = "Dystopia"},
+                {value = "243", label = "European Ambience"},
+                {value = "265", label = "Fantasy World"},
+                {value = "294", label = "Futuristic Setting"},
+                {value = "301", label = "Gate to Another World"},
+                {value = "334", label = "Heaven"},
+                {value = "336", label = "Hell"},
+                {value = "347", label = "Hospital"},
+                {value = "368", label = "Interdimensional Travel"},
+                {value = "391", label = "Library"},
+                {value = "400", label = "Lost Civilizations"},
+                {value = "434", label = "Medieval"},
+                {value = "446", label = "Modern Day"},
+                {value = "450", label = "Monster Society"},
+                {value = "454", label = "Mpreg"},
+                {value = "459", label = "Multiple Realms"},
+                {value = "460", label = "Multiple Reincarnated Individuals"},
+                {value = "461", label = "Multiple Timelines"},
+                {value = "462", label = "Multiple Transported Individuals"},
+                {value = "493", label = "Omegaverse"},
+                {value = "505", label = "Outer Space"},
+                {value = "510", label = "Parallel Worlds"},
+                {value = "544", label = "Post-apocalyptic"},
+                {value = "554", label = "Prison"},
+                {value = "582", label = "Restaurant"},
+                {value = "828", label = "Spiritual Energy Revival"},
+                {value = "835", label = "Steampunk"},
+                {value = "699", label = "Technological Gap"},
+                {value = "795", label = "Three Kingdoms"},
+                {value = "706", label = "Time Loop"},
+                {value = "708", label = "Time Paradox"},
+                {value = "710", label = "Time Travel"},
+                {value = "720", label = "Transported Modern Structure"},
+                {value = "723", label = "Tribal Society"},
+                {value = "756", label = "World Hopping"},
+                {value = "757", label = "World Travel"},
+                {value = "758", label = "World Tree"},
             }
         },
-
+        -- cat 4: Socio-Political Structures (71 tags)
         {
-            type = "tristate",
-            key = "tags_socio_political",
-            label = "Socio-Political Structures (71)",
+            type = "select",
+            key = "tag_pick_4",
+            label = "Tags: Socio-Political Structures (71)",
+            defaultValue = "",
             options = {
-                {value = "5", label = "Academy"}, {value = "29", label = "All-Girls School"}, {value = "51", label = "Aristocracy"},
-                {value = "52", label = "Arms Dealers"}, {value = "53", label = "Army"}, {value = "54", label = "Army Building"},
-                {value = "61", label = "Assassins"}, {value = "75", label = "Battle Academy"}, {value = "76", label = "Battle Competition"},
-                {value = "100", label = "Boss-Subordinate Relationship"}, {value = "108", label = "Business Management"}, {value = "806", label = "Business Wars"},
-                {value = "132", label = "Clan Building"}, {value = "137", label = "Clubs"}, {value = "153", label = "Contracts"},
-                {value = "156", label = "Cosmic Wars"}, {value = "159", label = "Court Official"}, {value = "162", label = "Crafting"},
-                {value = "185", label = "Debts"}, {value = "218", label = "Drugs"}, {value = "226", label = "Earth Invasion"},
-                {value = "228", label = "Economics"}, {value = "235", label = "Empires"}, {value = "242", label = "Eunuch"},
-                {value = "247", label = "Evil Religions"}, {value = "258", label = "Family Business"}, {value = "266", label = "Farming"},
-                {value = "282", label = "Fleet Battles"}, {value = "296", label = "Gambling"}, {value = "300", label = "Gangs"},
-                {value = "303", label = "Generals"}, {value = "308", label = "Gladiators"}, {value = "322", label = "Guilds"},
-                {value = "353", label = "Hunters"}, {value = "358", label = "Imperial Harem"}, {value = "362", label = "Industrialization"},
-                {value = "376", label = "JSDF"}, {value = "379", label = "Kingdom Building"}, {value = "380", label = "Kingdoms"},
-                {value = "381", label = "Knights"}, {value = "388", label = "Leadership"}, {value = "823", label = "Lord"},
-                {value = "408", label = "Loyal Subordinates"}, {value = "420", label = "Management"}, {value = "428", label = "Master-Disciple Relationship"},
-                {value = "429", label = "Master-Servant Relationship"}, {value = "431", label = "Matriarchy"}, {value = "437", label = "Military"},
-                {value = "448", label = "Money Grubber"}, {value = "485", label = "Nobles"}, {value = "529", label = "Pirates"},
-                {value = "536", label = "Politics"}, {value = "540", label = "Poor to Rich"}, {value = "579", label = "Religions"},
-                {value = "589", label = "Rich to Poor"}, {value = "594", label = "Royalty"}, {value = "599", label = "Samurai"},
-                {value = "609", label = "Secret Organizations"}, {value = "613", label = "Sect Development"}, {value = "656", label = "Slaves"},
-                {value = "678", label = "Strategic Battles"}, {value = "680", label = "Strength-based Social Hierarchy"}, {value = "684", label = "Student Council"},
-                {value = "685", label = "Student-Teacher Relationship"}, {value = "688", label = "Sudden Wealth"}, {value = "698", label = "Teamwork"},
-                {value = "802", label = "Territory Management"}, {value = "702", label = "Terrorists"}, {value = "747", label = "War Records"},
-                {value = "748", label = "Wars"}, {value = "751", label = "Wealthy Characters"},
+                {value = "", label = "Any"},
+                {value = "5", label = "Academy"},
+                {value = "29", label = "All-Girls School"},
+                {value = "51", label = "Aristocracy"},
+                {value = "52", label = "Arms Dealers"},
+                {value = "53", label = "Army"},
+                {value = "54", label = "Army Building"},
+                {value = "61", label = "Assassins"},
+                {value = "75", label = "Battle Academy"},
+                {value = "76", label = "Battle Competition"},
+                {value = "100", label = "Boss-Subordinate Relationship"},
+                {value = "108", label = "Business Management"},
+                {value = "806", label = "Business Wars"},
+                {value = "132", label = "Clan Building"},
+                {value = "137", label = "Clubs"},
+                {value = "153", label = "Contracts"},
+                {value = "156", label = "Cosmic Wars"},
+                {value = "159", label = "Court Official"},
+                {value = "162", label = "Crafting"},
+                {value = "185", label = "Debts"},
+                {value = "218", label = "Drugs"},
+                {value = "226", label = "Earth Invasion"},
+                {value = "228", label = "Economics"},
+                {value = "235", label = "Empires"},
+                {value = "242", label = "Eunuch"},
+                {value = "247", label = "Evil Religions"},
+                {value = "258", label = "Family Business"},
+                {value = "266", label = "Farming"},
+                {value = "282", label = "Fleet Battles"},
+                {value = "296", label = "Gambling"},
+                {value = "300", label = "Gangs"},
+                {value = "303", label = "Generals"},
+                {value = "308", label = "Gladiators"},
+                {value = "322", label = "Guilds"},
+                {value = "353", label = "Hunters"},
+                {value = "358", label = "Imperial Harem"},
+                {value = "362", label = "Industrialization"},
+                {value = "376", label = "JSDF"},
+                {value = "379", label = "Kingdom Building"},
+                {value = "380", label = "Kingdoms"},
+                {value = "381", label = "Knights"},
+                {value = "388", label = "Leadership"},
+                {value = "823", label = "Lord"},
+                {value = "408", label = "Loyal Subordinates"},
+                {value = "420", label = "Management"},
+                {value = "428", label = "Master-Disciple Relationship"},
+                {value = "429", label = "Master-Servant Relationship"},
+                {value = "431", label = "Matriarchy"},
+                {value = "437", label = "Military"},
+                {value = "448", label = "Money Grubber"},
+                {value = "485", label = "Nobles"},
+                {value = "529", label = "Pirates"},
+                {value = "536", label = "Politics"},
+                {value = "540", label = "Poor to Rich"},
+                {value = "579", label = "Religions"},
+                {value = "589", label = "Rich to Poor"},
+                {value = "594", label = "Royalty"},
+                {value = "599", label = "Samurai"},
+                {value = "609", label = "Secret Organizations"},
+                {value = "613", label = "Sect Development"},
+                {value = "656", label = "Slaves"},
+                {value = "678", label = "Strategic Battles"},
+                {value = "680", label = "Strength-based Social Hierarchy"},
+                {value = "684", label = "Student Council"},
+                {value = "685", label = "Student-Teacher Relationship"},
+                {value = "688", label = "Sudden Wealth"},
+                {value = "698", label = "Teamwork"},
+                {value = "802", label = "Territory Management"},
+                {value = "702", label = "Terrorists"},
+                {value = "747", label = "War Records"},
+                {value = "748", label = "Wars"},
+                {value = "751", label = "Wealthy Characters"},
             }
         },
-
+        -- cat 5: Relationship Tropes (136 tags)
         {
-            type = "tristate",
-            key = "tags_relationships",
-            label = "Relationship Tropes (136)",
+            type = "select",
+            key = "tag_pick_5",
+            label = "Tags: Relationship Tropes (136)",
+            defaultValue = "",
             options = {
-                {value = "21", label = "Adultery"}, {value = "23", label = "Affair"}, {value = "33", label = "Anal"},
-                {value = "55", label = "Arranged Marriage"}, {value = "77", label = "BDSM"}, {value = "82", label = "Bestiality"},
-                {value = "84", label = "Bickering Couple"}, {value = "88", label = "Blackmail"}, {value = "90", label = "Blind Dates"},
-                {value = "102", label = "Breast Fetish"}, {value = "103", label = "Broken Engagement"}, {value = "104", label = "Brother Complex"},
-                {value = "105", label = "Brotherhood"}, {value = "124", label = "Child Abuse"}, {value = "127", label = "Childhood Friends"},
-                {value = "128", label = "Childhood Love"}, {value = "129", label = "Childhood Promise"}, {value = "135", label = "Clingy Lover"},
-                {value = "138", label = "Clumsy Love Interests"}, {value = "141", label = "Cold Love Interests"}, {value = "148", label = "Complex Family Relationships"},
-                {value = "151", label = "Confinement"}, {value = "160", label = "Cousins"}, {value = "170", label = "Cunnilingus"},
-                {value = "184", label = "Death of Loved Ones"}, {value = "198", label = "Devoted Love Interests"}, {value = "199", label = "Different Social Status"},
-                {value = "207", label = "Divorce"}, {value = "211", label = "Doting Love Interests"}, {value = "225", label = "Early Romance"},
-                {value = "236", label = "Enemies Become Allies"}, {value = "237", label = "Enemies Become Lovers"}, {value = "238", label = "Engagement"},
-                {value = "249", label = "Exhibitionism"}, {value = "255", label = "Familial Love"}, {value = "257", label = "Family"},
-                {value = "259", label = "Family Conflict"}, {value = "271", label = "Fated Lovers"}, {value = "273", label = "Fellatio"},
-                {value = "279", label = "First Love"}, {value = "280", label = "First-time Intercourse"}, {value = "284", label = "Forced into a Relationship"},
-                {value = "285", label = "Forced Living Arrangements"}, {value = "286", label = "Forced Marriage"}, {value = "290", label = "Friends Become Enemies"},
-                {value = "848", label = "Furry Relationship"}, {value = "293", label = "Futanari"}, {value = "309", label = "Glasses-wearing Love Interests"},
-                {value = "321", label = "Guardian Relationship"}, {value = "326", label = "Handjob"}, {value = "329", label = "Harem-seeking Protagonist"},
-                {value = "351", label = "Human-Nonhuman Relationship"}, {value = "359", label = "Incest"}, {value = "373", label = "Jealousy"},
-                {value = "377", label = "Kidnappings"}, {value = "378", label = "Kind Love Interests"}, {value = "385", label = "Late Romance"},
-                {value = "398", label = "Long Separations"}, {value = "399", label = "Long-distance Relationship"}, {value = "402", label = "Love at First Sight"},
-                {value = "403", label = "Love Interest Falls in Love First"}, {value = "404", label = "Love Rivals"}, {value = "405", label = "Love Triangles"},
-                {value = "406", label = "Lovers Reunited"}, {value = "419", label = "Male Yandere"}, {value = "423", label = "Manly Gay Couple"},
-                {value = "424", label = "Marriage"}, {value = "425", label = "Marriage of Convenience"}, {value = "430", label = "Masturbation"},
-                {value = "438", label = "Mind Break"}, {value = "441", label = "Mismatched Couple"}, {value = "825", label = "More Children More Blessings"},
-                {value = "480", label = "Netorare"}, {value = "481", label = "Netorase"}, {value = "482", label = "Netori"},
-                {value = "488", label = "Nudity"}, {value = "490", label = "Obsessive Love"}, {value = "491", label = "Office Romance"},
-                {value = "492", label = "Older Love Interests"}, {value = "495", label = "Online Romance"}, {value = "499", label = "Orgy"},
-                {value = "504", label = "Outdoor Intercourse"}, {value = "507", label = "Overprotective Siblings"}, {value = "509", label = "Paizuri"},
-                {value = "512", label = "Parent Complex"}, {value = "517", label = "Persistent Love Interests"}, {value = "537", label = "Polyandry"},
-                {value = "538", label = "Polygamy"}, {value = "541", label = "Popular Love Interests"}, {value = "543", label = "Possessive Characters"},
-                {value = "545", label = "Power Couple"}, {value = "549", label = "Pregnancy"}, {value = "550", label = "Pretend Lovers"},
-                {value = "558", label = "Prostitutes"}, {value = "559", label = "Protagonist Falls in Love First"}, {value = "568", label = "R-18"},
-                {value = "571", label = "Rape"}, {value = "572", label = "Rape Victim Becomes Lover"}, {value = "586", label = "Reverse Harem"},
-                {value = "587", label = "Reverse Rape"}, {value = "588", label = "Reversible Couple"}, {value = "592", label = "Romantic Subplot"},
-                {value = "607", label = "Secret Crush"}, {value = "610", label = "Secret Relationship"}, {value = "614", label = "Seduction"},
-                {value = "619", label = "Senpai-Kouhai Relationship"}, {value = "626", label = "Sex Friends"}, {value = "627", label = "Sex Slaves"},
-                {value = "628", label = "Sexual Abuse"}, {value = "638", label = "Shoujo-Ai Subplot"}, {value = "639", label = "Shounen-Ai Subplot"},
-                {value = "642", label = "Sibling Rivalry"}, {value = "643", label = "Sibling's Care"}, {value = "644", label = "Siblings"},
-                {value = "645", label = "Siblings Not Related by Blood"}, {value = "787", label = "Single Female Lead"}, {value = "649", label = "Single Parent"},
-                {value = "650", label = "Sister Complex"}, {value = "654", label = "Slave Harem"}, {value = "659", label = "Slow Romance"},
-                {value = "660", label = "Smart Couple"}, {value = "672", label = "Stalkers"}, {value = "673", label = "Stockholm Syndrome"},
-                {value = "681", label = "Strong Love Interests"}, {value = "704", label = "Threesome"}, {value = "713", label = "Torture"},
-                {value = "714", label = "Toys"}, {value = "725", label = "Tsundere"}, {value = "726", label = "Twins"},
-                {value = "730", label = "Unconditional Love"}, {value = "738", label = "Unrequited Love"}, {value = "745", label = "Voyeurism"},
-                {value = "760", label = "Yandere"}, {value = "762", label = "Younger Brothers"}, {value = "763", label = "Younger Love Interests"},
+                {value = "", label = "Any"},
+                {value = "21", label = "Adultery"},
+                {value = "23", label = "Affair"},
+                {value = "33", label = "Anal"},
+                {value = "55", label = "Arranged Marriage"},
+                {value = "77", label = "BDSM"},
+                {value = "82", label = "Bestiality"},
+                {value = "84", label = "Bickering Couple"},
+                {value = "88", label = "Blackmail"},
+                {value = "90", label = "Blind Dates"},
+                {value = "102", label = "Breast Fetish"},
+                {value = "103", label = "Broken Engagement"},
+                {value = "104", label = "Brother Complex"},
+                {value = "105", label = "Brotherhood"},
+                {value = "124", label = "Child Abuse"},
+                {value = "127", label = "Childhood Friends"},
+                {value = "128", label = "Childhood Love"},
+                {value = "129", label = "Childhood Promise"},
+                {value = "135", label = "Clingy Lover"},
+                {value = "138", label = "Clumsy Love Interests"},
+                {value = "141", label = "Cold Love Interests"},
+                {value = "148", label = "Complex Family Relationships"},
+                {value = "151", label = "Confinement"},
+                {value = "160", label = "Cousins"},
+                {value = "170", label = "Cunnilingus"},
+                {value = "184", label = "Death of Loved Ones"},
+                {value = "198", label = "Devoted Love Interests"},
+                {value = "199", label = "Different Social Status"},
+                {value = "207", label = "Divorce"},
+                {value = "211", label = "Doting Love Interests"},
+                {value = "225", label = "Early Romance"},
+                {value = "236", label = "Enemies Become Allies"},
+                {value = "237", label = "Enemies Become Lovers"},
+                {value = "238", label = "Engagement"},
+                {value = "249", label = "Exhibitionism"},
+                {value = "255", label = "Familial Love"},
+                {value = "257", label = "Family"},
+                {value = "259", label = "Family Conflict"},
+                {value = "271", label = "Fated Lovers"},
+                {value = "273", label = "Fellatio"},
+                {value = "279", label = "First Love"},
+                {value = "280", label = "First-time Intercourse"},
+                {value = "284", label = "Forced into a Relationship"},
+                {value = "285", label = "Forced Living Arrangements"},
+                {value = "286", label = "Forced Marriage"},
+                {value = "290", label = "Friends Become Enemies"},
+                {value = "848", label = "Furry Relationship"},
+                {value = "293", label = "Futanari"},
+                {value = "309", label = "Glasses-wearing Love Interests"},
+                {value = "321", label = "Guardian Relationship"},
+                {value = "326", label = "Handjob"},
+                {value = "329", label = "Harem-seeking Protagonist"},
+                {value = "351", label = "Human-Nonhuman Relationship"},
+                {value = "359", label = "Incest"},
+                {value = "373", label = "Jealousy"},
+                {value = "377", label = "Kidnappings"},
+                {value = "378", label = "Kind Love Interests"},
+                {value = "385", label = "Late Romance"},
+                {value = "398", label = "Long Separations"},
+                {value = "399", label = "Long-distance Relationship"},
+                {value = "402", label = "Love at First Sight"},
+                {value = "403", label = "Love Interest Falls in Love First"},
+                {value = "404", label = "Love Rivals"},
+                {value = "405", label = "Love Triangles"},
+                {value = "406", label = "Lovers Reunited"},
+                {value = "419", label = "Male Yandere"},
+                {value = "423", label = "Manly Gay Couple"},
+                {value = "424", label = "Marriage"},
+                {value = "425", label = "Marriage of Convenience"},
+                {value = "430", label = "Masturbation"},
+                {value = "438", label = "Mind Break"},
+                {value = "441", label = "Mismatched Couple"},
+                {value = "825", label = "More Children More Blessings"},
+                {value = "480", label = "Netorare"},
+                {value = "481", label = "Netorase"},
+                {value = "482", label = "Netori"},
+                {value = "488", label = "Nudity"},
+                {value = "490", label = "Obsessive Love"},
+                {value = "491", label = "Office Romance"},
+                {value = "492", label = "Older Love Interests"},
+                {value = "495", label = "Online Romance"},
+                {value = "499", label = "Orgy"},
+                {value = "504", label = "Outdoor Intercourse"},
+                {value = "507", label = "Overprotective Siblings"},
+                {value = "509", label = "Paizuri"},
+                {value = "512", label = "Parent Complex"},
+                {value = "517", label = "Persistent Love Interests"},
+                {value = "537", label = "Polyandry"},
+                {value = "538", label = "Polygamy"},
+                {value = "541", label = "Popular Love Interests"},
+                {value = "543", label = "Possessive Characters"},
+                {value = "545", label = "Power Couple"},
+                {value = "549", label = "Pregnancy"},
+                {value = "550", label = "Pretend Lovers"},
+                {value = "558", label = "Prostitutes"},
+                {value = "559", label = "Protagonist Falls in Love First"},
+                {value = "568", label = "R-18"},
+                {value = "571", label = "Rape"},
+                {value = "572", label = "Rape Victim Becomes Lover"},
+                {value = "586", label = "Reverse Harem"},
+                {value = "587", label = "Reverse Rape"},
+                {value = "588", label = "Reversible Couple"},
+                {value = "592", label = "Romantic Subplot"},
+                {value = "607", label = "Secret Crush"},
+                {value = "610", label = "Secret Relationship"},
+                {value = "614", label = "Seduction"},
+                {value = "619", label = "Senpai-Kouhai Relationship"},
+                {value = "626", label = "Sex Friends"},
+                {value = "627", label = "Sex Slaves"},
+                {value = "628", label = "Sexual Abuse"},
+                {value = "638", label = "Shoujo-Ai Subplot"},
+                {value = "639", label = "Shounen-Ai Subplot"},
+                {value = "642", label = "Sibling Rivalry"},
+                {value = "643", label = "Sibling's Care"},
+                {value = "644", label = "Siblings"},
+                {value = "645", label = "Siblings Not Related by Blood"},
+                {value = "787", label = "Single Female Lead"},
+                {value = "649", label = "Single Parent"},
+                {value = "650", label = "Sister Complex"},
+                {value = "654", label = "Slave Harem"},
+                {value = "659", label = "Slow Romance"},
+                {value = "660", label = "Smart Couple"},
+                {value = "672", label = "Stalkers"},
+                {value = "673", label = "Stockholm Syndrome"},
+                {value = "681", label = "Strong Love Interests"},
+                {value = "704", label = "Threesome"},
+                {value = "713", label = "Torture"},
+                {value = "714", label = "Toys"},
+                {value = "725", label = "Tsundere"},
+                {value = "726", label = "Twins"},
+                {value = "730", label = "Unconditional Love"},
+                {value = "738", label = "Unrequited Love"},
+                {value = "745", label = "Voyeurism"},
+                {value = "760", label = "Yandere"},
+                {value = "762", label = "Younger Brothers"},
+                {value = "763", label = "Younger Love Interests"},
                 {value = "764", label = "Younger Sisters"},
             }
         },
-
+        -- cat 6: Narrative (46 tags)
         {
-            type = "tristate",
-            key = "tags_narrative",
-            label = "Narrative (46)",
+            type = "select",
+            key = "tag_pick_6",
+            label = "Tags: Narrative (46)",
+            defaultValue = "",
             options = {
-                {value = "31", label = "Amnesia"}, {value = "83", label = "Betrayal"}, {value = "112", label = "Cannibalism"},
-                {value = "121", label = "Chat Rooms"}, {value = "143", label = "Collection of Short Stories"}, {value = "152", label = "Conflicting Loyalties"},
-                {value = "163", label = "Crime"}, {value = "164", label = "Criminals"}, {value = "166", label = "Crossover"},
-                {value = "183", label = "Death"}, {value = "187", label = "Delusions"}, {value = "798", label = "Eavesdropping"},
-                {value = "241", label = "Episodic"}, {value = "281", label = "Flashbacks"}, {value = "318", label = "Gore"},
-                {value = "349", label = "Human Experimentation"}, {value = "355", label = "Identity Crisis"}, {value = "356", label = "Imaginary Friend"},
-                {value = "364", label = "Inheritance"}, {value = "367", label = "Interconnected Storylines"}, {value = "370", label = "Investigations"},
-                {value = "824", label = "Life Script"}, {value = "455", label = "Multiple Identities"}, {value = "457", label = "Multiple POV"},
-                {value = "463", label = "Murders"}, {value = "470", label = "Mysterious Past"}, {value = "471", label = "Mystery Solving"},
-                {value = "483", label = "Nightmares"}, {value = "487", label = "Non-linear Storytelling"}, {value = "494", label = "Oneshot"},
-                {value = "498", label = "Organized Crime"}, {value = "513", label = "Parody"}, {value = "515", label = "Past Plays a Big Role"},
-                {value = "546", label = "Power Struggle"}, {value = "557", label = "Prophecies"}, {value = "573", label = "Rebellion"},
-                {value = "585", label = "Revenge"}, {value = "591", label = "Rivalry"}, {value = "600", label = "Saving the World"},
-                {value = "601", label = "Schemes And Conspiracies"}, {value = "608", label = "Secret Identity"}, {value = "612", label = "Secrets"},
-                {value = "636", label = "Short Story"}, {value = "692", label = "Survival"}, {value = "705", label = "Thriller"},
+                {value = "", label = "Any"},
+                {value = "31", label = "Amnesia"},
+                {value = "83", label = "Betrayal"},
+                {value = "112", label = "Cannibalism"},
+                {value = "121", label = "Chat Rooms"},
+                {value = "143", label = "Collection of Short Stories"},
+                {value = "152", label = "Conflicting Loyalties"},
+                {value = "163", label = "Crime"},
+                {value = "164", label = "Criminals"},
+                {value = "166", label = "Crossover"},
+                {value = "183", label = "Death"},
+                {value = "187", label = "Delusions"},
+                {value = "798", label = "Eavesdropping"},
+                {value = "241", label = "Episodic"},
+                {value = "281", label = "Flashbacks"},
+                {value = "318", label = "Gore"},
+                {value = "349", label = "Human Experimentation"},
+                {value = "355", label = "Identity Crisis"},
+                {value = "356", label = "Imaginary Friend"},
+                {value = "364", label = "Inheritance"},
+                {value = "367", label = "Interconnected Storylines"},
+                {value = "370", label = "Investigations"},
+                {value = "824", label = "Life Script"},
+                {value = "455", label = "Multiple Identities"},
+                {value = "457", label = "Multiple POV"},
+                {value = "463", label = "Murders"},
+                {value = "470", label = "Mysterious Past"},
+                {value = "471", label = "Mystery Solving"},
+                {value = "483", label = "Nightmares"},
+                {value = "487", label = "Non-linear Storytelling"},
+                {value = "494", label = "Oneshot"},
+                {value = "498", label = "Organized Crime"},
+                {value = "513", label = "Parody"},
+                {value = "515", label = "Past Plays a Big Role"},
+                {value = "546", label = "Power Struggle"},
+                {value = "557", label = "Prophecies"},
+                {value = "573", label = "Rebellion"},
+                {value = "585", label = "Revenge"},
+                {value = "591", label = "Rivalry"},
+                {value = "600", label = "Saving the World"},
+                {value = "601", label = "Schemes And Conspiracies"},
+                {value = "608", label = "Secret Identity"},
+                {value = "612", label = "Secrets"},
+                {value = "636", label = "Short Story"},
+                {value = "692", label = "Survival"},
+                {value = "705", label = "Thriller"},
                 {value = "709", label = "Time Skip"},
             }
         },
-
+        -- cat 7: Beings & Factions (68 tags)
         {
-            type = "tristate",
-            key = "tags_beings_factions",
-            label = "Beings & Factions (68)",
+            type = "select",
+            key = "tag_pick_7",
+            label = "Tags: Beings & Factions (68)",
+            defaultValue = "",
             options = {
-                {value = "22", label = "Adventurers"}, {value = "28", label = "Aliens"}, {value = "38", label = "Angels"},
-                {value = "62", label = "Astrologers"}, {value = "78", label = "Beast Companions"}, {value = "79", label = "Beastkin"},
-                {value = "80", label = "Beasts"}, {value = "188", label = "Demi-Humans"}, {value = "189", label = "Demon Lord"},
-                {value = "191", label = "Demons"}, {value = "216", label = "Dragons"}, {value = "219", label = "Druids"},
-                {value = "222", label = "Dwarfs"}, {value = "233", label = "Elves"}, {value = "239", label = "Engineer"},
-                {value = "244", label = "Evil Gods"}, {value = "245", label = "Evil Organizations"}, {value = "252", label = "Fairies"},
-                {value = "253", label = "Fallen Angels"}, {value = "256", label = "Familiars"}, {value = "264", label = "Fantasy Creatures"},
-                {value = "289", label = "Fox Spirits"}, {value = "307", label = "Ghosts"}, {value = "311", label = "Goblins"},
-                {value = "313", label = "God-human Relationship"}, {value = "314", label = "Goddesses"}, {value = "316", label = "Gods"},
-                {value = "317", label = "Golems"}, {value = "319", label = "Grave Keepers"}, {value = "338", label = "Herbalist"},
-                {value = "339", label = "Heroes"}, {value = "345", label = "Homunculus"}, {value = "357", label = "Immortals"},
-                {value = "360", label = "Incubus"}, {value = "366", label = "Insects"}, {value = "374", label = "Jiangshi"},
-                {value = "389", label = "Legends"}, {value = "411", label = "Magic Beasts"}, {value = "449", label = "Monster Girls"},
-                {value = "451", label = "Monster Tamer"}, {value = "452", label = "Monsters"}, {value = "465", label = "Mutated Creatures"},
-                {value = "466", label = "Mutations"}, {value = "472", label = "Mythical Beasts"}, {value = "484", label = "Ninjas"},
-                {value = "497", label = "Orcs"}, {value = "524", label = "Phoenixes"}, {value = "534", label = "Police"},
-                {value = "552", label = "Priestesses"}, {value = "553", label = "Priests"}, {value = "597", label = "Saints"},
-                {value = "620", label = "Sentient Objects"}, {value = "624", label = "Seven Deadly Sins"}, {value = "625", label = "Seven Virtues"},
-                {value = "635", label = "Shikigami"}, {value = "664", label = "Souls"}, {value = "669", label = "Spirit Advisor"},
-                {value = "671", label = "Spirits"}, {value = "679", label = "Strategist"}, {value = "686", label = "Succubus"},
-                {value = "695", label = "Sword Wielder"}, {value = "700", label = "Tentacles"}, {value = "739", label = "Valkyries"},
-                {value = "740", label = "Vampires"}, {value = "752", label = "Werebeasts"}, {value = "754", label = "Witches"},
-                {value = "761", label = "Youkai"}, {value = "765", label = "Zombies"},
+                {value = "", label = "Any"},
+                {value = "22", label = "Adventurers"},
+                {value = "28", label = "Aliens"},
+                {value = "38", label = "Angels"},
+                {value = "62", label = "Astrologers"},
+                {value = "78", label = "Beast Companions"},
+                {value = "79", label = "Beastkin"},
+                {value = "80", label = "Beasts"},
+                {value = "188", label = "Demi-Humans"},
+                {value = "189", label = "Demon Lord"},
+                {value = "191", label = "Demons"},
+                {value = "216", label = "Dragons"},
+                {value = "219", label = "Druids"},
+                {value = "222", label = "Dwarfs"},
+                {value = "233", label = "Elves"},
+                {value = "239", label = "Engineer"},
+                {value = "244", label = "Evil Gods"},
+                {value = "245", label = "Evil Organizations"},
+                {value = "252", label = "Fairies"},
+                {value = "253", label = "Fallen Angels"},
+                {value = "256", label = "Familiars"},
+                {value = "264", label = "Fantasy Creatures"},
+                {value = "289", label = "Fox Spirits"},
+                {value = "307", label = "Ghosts"},
+                {value = "311", label = "Goblins"},
+                {value = "313", label = "God-human Relationship"},
+                {value = "314", label = "Goddesses"},
+                {value = "316", label = "Gods"},
+                {value = "317", label = "Golems"},
+                {value = "319", label = "Grave Keepers"},
+                {value = "338", label = "Herbalist"},
+                {value = "339", label = "Heroes"},
+                {value = "345", label = "Homunculus"},
+                {value = "357", label = "Immortals"},
+                {value = "360", label = "Incubus"},
+                {value = "366", label = "Insects"},
+                {value = "374", label = "Jiangshi"},
+                {value = "389", label = "Legends"},
+                {value = "411", label = "Magic Beasts"},
+                {value = "449", label = "Monster Girls"},
+                {value = "451", label = "Monster Tamer"},
+                {value = "452", label = "Monsters"},
+                {value = "465", label = "Mutated Creatures"},
+                {value = "466", label = "Mutations"},
+                {value = "472", label = "Mythical Beasts"},
+                {value = "484", label = "Ninjas"},
+                {value = "497", label = "Orcs"},
+                {value = "524", label = "Phoenixes"},
+                {value = "534", label = "Police"},
+                {value = "552", label = "Priestesses"},
+                {value = "553", label = "Priests"},
+                {value = "597", label = "Saints"},
+                {value = "620", label = "Sentient Objects"},
+                {value = "624", label = "Seven Deadly Sins"},
+                {value = "625", label = "Seven Virtues"},
+                {value = "635", label = "Shikigami"},
+                {value = "664", label = "Souls"},
+                {value = "669", label = "Spirit Advisor"},
+                {value = "671", label = "Spirits"},
+                {value = "679", label = "Strategist"},
+                {value = "686", label = "Succubus"},
+                {value = "695", label = "Sword Wielder"},
+                {value = "700", label = "Tentacles"},
+                {value = "739", label = "Valkyries"},
+                {value = "740", label = "Vampires"},
+                {value = "752", label = "Werebeasts"},
+                {value = "754", label = "Witches"},
+                {value = "761", label = "Youkai"},
+                {value = "765", label = "Zombies"},
             }
         },
-
+        -- cat 8: Professional Archetypes (64 tags)
         {
-            type = "tristate",
-            key = "tags_professional",
-            label = "Professional Archetypes (64)",
+            type = "select",
+            key = "tag_pick_8",
+            label = "Tags: Professional Archetypes (64)",
+            defaultValue = "",
             options = {
-                {value = "7", label = "Acting"}, {value = "44", label = "Antique Shop"}, {value = "50", label = "Archery"},
-                {value = "60", label = "Artists"}, {value = "68", label = "Bands"}, {value = "809", label = "Basketball"},
-                {value = "89", label = "Blacksmith"}, {value = "97", label = "Bodyguards"}, {value = "109", label = "Businessmen"},
-                {value = "110", label = "Butlers"}, {value = "117", label = "Celebrities"}, {value = "123", label = "Chefs"},
-                {value = "157", label = "Cosplay"}, {value = "177", label = "Dancers"}, {value = "196", label = "Detectives"},
-                {value = "208", label = "Doctors"}, {value = "214", label = "Dragon Riders"}, {value = "215", label = "Dragon Slayers"},
-                {value = "224", label = "e-Sports"}, {value = "229", label = "Editors"}, {value = "274", label = "Female Master"},
-                {value = "780", label = "Football"}, {value = "299", label = "Gamers"}, {value = "323", label = "Gunfighters"},
-                {value = "324", label = "Hackers"}, {value = "779", label = "Hollywood"}, {value = "386", label = "Lawyers"},
-                {value = "782", label = "Live Streaming"}, {value = "860", label = "Machinist "}, {value = "416", label = "Maids"},
-                {value = "421", label = "Mangaka"}, {value = "433", label = "Medical Knowledge"}, {value = "435", label = "Mercenaries"},
-                {value = "436", label = "Merchants"}, {value = "445", label = "Models"}, {value = "453", label = "Movies"},
-                {value = "464", label = "Music"}, {value = "489", label = "Nurses"}, {value = "514", label = "Part-Time Job"},
-                {value = "521", label = "Pharmacist"}, {value = "525", label = "Photography"}, {value = "528", label = "Pilots"},
-                {value = "532", label = "Poetry"}, {value = "533", label = "Poisons"}, {value = "556", label = "Programmer"},
-                {value = "564", label = "Puppeteers"}, {value = "581", label = "Reporters"}, {value = "603", label = "Scientists"},
-                {value = "604", label = "Sculptors"}, {value = "622", label = "Serial Killers"}, {value = "623", label = "Servants"},
-                {value = "634", label = "Shield User"}, {value = "640", label = "Showbiz"}, {value = "648", label = "Singers"},
-                {value = "662", label = "Soldiers"}, {value = "666", label = "Spear Wielder"}, {value = "668", label = "Spies"},
-                {value = "675", label = "Store Owner"}, {value = "697", label = "Teachers"}, {value = "703", label = "Thieves"},
-                {value = "733", label = "Unique Weapon User"}, {value = "744", label = "Voice Actors"}, {value = "746", label = "Waiters"},
+                {value = "", label = "Any"},
+                {value = "7", label = "Acting"},
+                {value = "44", label = "Antique Shop"},
+                {value = "50", label = "Archery"},
+                {value = "60", label = "Artists"},
+                {value = "68", label = "Bands"},
+                {value = "809", label = "Basketball"},
+                {value = "89", label = "Blacksmith"},
+                {value = "97", label = "Bodyguards"},
+                {value = "109", label = "Businessmen"},
+                {value = "110", label = "Butlers"},
+                {value = "117", label = "Celebrities"},
+                {value = "123", label = "Chefs"},
+                {value = "157", label = "Cosplay"},
+                {value = "177", label = "Dancers"},
+                {value = "196", label = "Detectives"},
+                {value = "208", label = "Doctors"},
+                {value = "214", label = "Dragon Riders"},
+                {value = "215", label = "Dragon Slayers"},
+                {value = "224", label = "e-Sports"},
+                {value = "229", label = "Editors"},
+                {value = "274", label = "Female Master"},
+                {value = "780", label = "Football"},
+                {value = "299", label = "Gamers"},
+                {value = "323", label = "Gunfighters"},
+                {value = "324", label = "Hackers"},
+                {value = "779", label = "Hollywood"},
+                {value = "386", label = "Lawyers"},
+                {value = "782", label = "Live Streaming"},
+                {value = "860", label = "Machinist"},
+                {value = "416", label = "Maids"},
+                {value = "421", label = "Mangaka"},
+                {value = "433", label = "Medical Knowledge"},
+                {value = "435", label = "Mercenaries"},
+                {value = "436", label = "Merchants"},
+                {value = "445", label = "Models"},
+                {value = "453", label = "Movies"},
+                {value = "464", label = "Music"},
+                {value = "489", label = "Nurses"},
+                {value = "514", label = "Part-Time Job"},
+                {value = "521", label = "Pharmacist"},
+                {value = "525", label = "Photography"},
+                {value = "528", label = "Pilots"},
+                {value = "532", label = "Poetry"},
+                {value = "533", label = "Poisons"},
+                {value = "556", label = "Programmer"},
+                {value = "564", label = "Puppeteers"},
+                {value = "581", label = "Reporters"},
+                {value = "603", label = "Scientists"},
+                {value = "604", label = "Sculptors"},
+                {value = "622", label = "Serial Killers"},
+                {value = "623", label = "Servants"},
+                {value = "634", label = "Shield User"},
+                {value = "640", label = "Showbiz"},
+                {value = "648", label = "Singers"},
+                {value = "662", label = "Soldiers"},
+                {value = "666", label = "Spear Wielder"},
+                {value = "668", label = "Spies"},
+                {value = "675", label = "Store Owner"},
+                {value = "697", label = "Teachers"},
+                {value = "703", label = "Thieves"},
+                {value = "733", label = "Unique Weapon User"},
+                {value = "744", label = "Voice Actors"},
+                {value = "746", label = "Waiters"},
                 {value = "759", label = "Writers"},
             }
         },
-
+        -- cat 9: Tone & Atmosphere (27 tags)
         {
-            type = "tristate",
-            key = "tags_tone",
-            label = "Tone & Atmosphere (27)",
+            type = "select",
+            key = "tag_pick_9",
+            label = "Tags: Tone & Atmosphere (27)",
+            defaultValue = "",
             options = {
-                {value = "4", label = "Abusive Characters"}, {value = "107", label = "Bullying"}, {value = "146", label = "Comedic Undertone"},
-                {value = "155", label = "Corruption"}, {value = "167", label = "Cruel Characters"}, {value = "176", label = "Cute Story"},
-                {value = "181", label = "Dark"}, {value = "789", label = "Dark Fantasy"}, {value = "193", label = "Depictions of Cruelty"},
-                {value = "194", label = "Depression"}, {value = "195", label = "Destiny"}, {value = "201", label = "Discrimination"},
-                {value = "262", label = "Fanaticism"}, {value = "291", label = "Friendship"}, {value = "333", label = "Heartwarming"},
-                {value = "396", label = "Loneliness"}, {value = "442", label = "Misunderstandings"}, {value = "469", label = "Mysterious Illness"},
-                {value = "476", label = "Nationalism"}, {value = "522", label = "Philosophical"}, {value = "523", label = "Phobias"},
-                {value = "567", label = "R-15"}, {value = "570", label = "Racism"}, {value = "646", label = "Sickly Characters"},
-                {value = "661", label = "Social Outcasts"}, {value = "689", label = "Suicides"}, {value = "701", label = "Terminal Illness"},
+                {value = "", label = "Any"},
+                {value = "4", label = "Abusive Characters"},
+                {value = "107", label = "Bullying"},
+                {value = "146", label = "Comedic Undertone"},
+                {value = "155", label = "Corruption"},
+                {value = "167", label = "Cruel Characters"},
+                {value = "176", label = "Cute Story"},
+                {value = "181", label = "Dark"},
+                {value = "789", label = "Dark Fantasy"},
+                {value = "193", label = "Depictions of Cruelty"},
+                {value = "194", label = "Depression"},
+                {value = "195", label = "Destiny"},
+                {value = "201", label = "Discrimination"},
+                {value = "262", label = "Fanaticism"},
+                {value = "291", label = "Friendship"},
+                {value = "333", label = "Heartwarming"},
+                {value = "396", label = "Loneliness"},
+                {value = "442", label = "Misunderstandings"},
+                {value = "469", label = "Mysterious Illness"},
+                {value = "476", label = "Nationalism"},
+                {value = "522", label = "Philosophical"},
+                {value = "523", label = "Phobias"},
+                {value = "567", label = "R-15"},
+                {value = "570", label = "Racism"},
+                {value = "646", label = "Sickly Characters"},
+                {value = "661", label = "Social Outcasts"},
+                {value = "689", label = "Suicides"},
+                {value = "701", label = "Terminal Illness"},
             }
         },
-
+        -- cat 10: Adaptations (90 tags)
         {
-            type = "tristate",
-            key = "tags_adaptations",
-            label = "Adaptations (85)",
+            type = "select",
+            key = "tag_pick_10",
+            label = "Tags: Adaptations (90)",
+            defaultValue = "",
             options = {
-                {value = "8", label = "Adapted from Manga"}, {value = "9", label = "Adapted from Manhua"}, {value = "10", label = "Adapted to Anime"},
-                {value = "846", label = "Adapted to Donghua"}, {value = "11", label = "Adapted to Drama"}, {value = "12", label = "Adapted to Drama CD"},
-                {value = "13", label = "Adapted to Game"}, {value = "14", label = "Adapted to Manga"}, {value = "15", label = "Adapted to Manhua"},
-                {value = "16", label = "Adapted to Manhwa"}, {value = "17", label = "Adapted to Movie"}, {value = "18", label = "Adapted to Visual Novel"},
-                {value = "833", label = "Arknights"}, {value = "66", label = "Award-winning Work"}, {value = "69", label = "Based on a Movie"},
-                {value = "70", label = "Based on a Song"}, {value = "71", label = "Based on a TV Show"}, {value = "72", label = "Based on a Video Game"},
-                {value = "73", label = "Based on a Visual Novel"}, {value = "74", label = "Based on an Anime"}, {value = "839", label = "Black Clover"},
-                {value = "770", label = "Bleach"}, {value = "832", label = "BTTH"}, {value = "854", label = "Classroom of the Elite"},
-                {value = "800", label = "Conferred Gods"}, {value = "783", label = "Cyberpunk 2077"}, {value = "840", label = "Danmachi"},
-                {value = "778", label = "DC Universe"}, {value = "812", label = "Demon Slayer"}, {value = "804", label = "Detective Conan"},
-                {value = "851", label = "Digimon"}, {value = "794", label = "DnD"}, {value = "772", label = "Douluo Dalu"},
-                {value = "773", label = "Dragon Ball"}, {value = "868", label = "Fabulous Beast"}, {value = "814", label = "Fairy Tail"},
-                {value = "872", label = "Final Fantasy"}, {value = "816", label = "Frieren"}, {value = "813", label = "Game of Thrones"},
-                {value = "815", label = "Genshin Impact"}, {value = "768", label = "Harry Potter"}, {value = "847", label = "Highschool DxD"},
-                {value = "865", label = "Hikigaya"}, {value = "801", label = "Honghuang"}, {value = "818", label = "Honkai"},
-                {value = "777", label = "Hunter x Hunter"}, {value = "859", label = "JoJo’s Bizarre Adventure"}, {value = "796", label = "Journey to the West"},
-                {value = "776", label = "Jujutsu Kaisen"}, {value = "843", label = "Kamen Rider"}, {value = "864", label = "King's Avatar"},
-                {value = "862", label = "Kirkmanverse"}, {value = "791", label = "League of Legends"}, {value = "799", label = "Lord of the Mysteries"},
-                {value = "853", label = "Lord of the Ring"}, {value = "766", label = "Marvel"}, {value = "790", label = "Minecraft"},
-                {value = "769", label = "Naruto"}, {value = "844", label = "Nasuverse"}, {value = "767", label = "One Piece"},
-                {value = "837", label = "One Punch Man"}, {value = "826", label = "Overlord"}, {value = "863", label = "Pirates of Caribbean"},
-                {value = "771", label = "Pokemon"}, {value = "858", label = "Project Moon"}, {value = "861", label = "Qing Transmigration"},
-                {value = "856", label = "Resident Evil"}, {value = "820", label = "Siheyuan"}, {value = "870", label = "Slay the Gods"},
-                {value = "817", label = "Star Wars"}, {value = "866", label = "Strike the Blood"}, {value = "785", label = "Swallowed Star"},
-                {value = "836", label = "The Boys"}, {value = "869", label = "The Eminence in Shadow"}, {value = "852", label = "The Walking Dead"},
-                {value = "850", label = "Toaru"}, {value = "857", label = "Touhou Project"}, {value = "838", label = "Ultraman"},
-                {value = "834", label = "Uma Musume"}, {value = "845", label = "Versatile Mage"}, {value = "743", label = "Vocaloid"},
-                {value = "775", label = "Warhammer"}, {value = "819", label = "Witcher"}, {value = "774", label = "Yu-Gi-Oh!"},
+                {value = "", label = "Any"},
+                {value = "8", label = "Adapted from Manga"},
+                {value = "9", label = "Adapted from Manhua"},
+                {value = "10", label = "Adapted to Anime"},
+                {value = "846", label = "Adapted to Donghua"},
+                {value = "11", label = "Adapted to Drama"},
+                {value = "12", label = "Adapted to Drama CD"},
+                {value = "13", label = "Adapted to Game"},
+                {value = "14", label = "Adapted to Manga"},
+                {value = "15", label = "Adapted to Manhua"},
+                {value = "16", label = "Adapted to Manhwa"},
+                {value = "17", label = "Adapted to Movie"},
+                {value = "18", label = "Adapted to Visual Novel"},
+                {value = "833", label = "Arknights"},
+                {value = "66", label = "Award-winning Work"},
+                {value = "69", label = "Based on a Movie"},
+                {value = "70", label = "Based on a Song"},
+                {value = "71", label = "Based on a TV Show"},
+                {value = "72", label = "Based on a Video Game"},
+                {value = "73", label = "Based on a Visual Novel"},
+                {value = "74", label = "Based on an Anime"},
+                {value = "839", label = "Black Clover"},
+                {value = "770", label = "Bleach"},
+                {value = "885", label = "Blue Archive"},
+                {value = "832", label = "BTTH"},
+                {value = "854", label = "Classroom of the Elite"},
+                {value = "800", label = "Conferred Gods"},
+                {value = "783", label = "Cyberpunk 2077"},
+                {value = "840", label = "Danmachi"},
+                {value = "778", label = "DC Universe"},
+                {value = "812", label = "Demon Slayer"},
+                {value = "804", label = "Detective Conan"},
+                {value = "851", label = "Digimon"},
+                {value = "794", label = "DnD"},
+                {value = "772", label = "Douluo Dalu"},
+                {value = "773", label = "Dragon Ball"},
+                {value = "887", label = "Dragon Raja"},
+                {value = "868", label = "Fabulous Beast"},
+                {value = "814", label = "Fairy Tail"},
+                {value = "872", label = "Final Fantasy"},
+                {value = "886", label = "Food Wars!"},
+                {value = "816", label = "Frieren"},
+                {value = "813", label = "Game of Thrones"},
+                {value = "815", label = "Genshin Impact"},
+                {value = "768", label = "Harry Potter"},
+                {value = "847", label = "Highschool DxD"},
+                {value = "865", label = "Hikigaya"},
+                {value = "801", label = "Honghuang"},
+                {value = "818", label = "Honkai Impact 3"},
+                {value = "889", label = "Honkai Star Rails"},
+                {value = "777", label = "Hunter x Hunter"},
+                {value = "859", label = "JoJo’s Bizarre Adventure"},
+                {value = "796", label = "Journey to the West"},
+                {value = "776", label = "Jujutsu Kaisen"},
+                {value = "843", label = "Kamen Rider"},
+                {value = "864", label = "King's Avatar"},
+                {value = "862", label = "Kirkmanverse"},
+                {value = "791", label = "League of Legends"},
+                {value = "799", label = "Lord of the Mysteries"},
+                {value = "853", label = "Lord of the Ring"},
+                {value = "766", label = "Marvel"},
+                {value = "790", label = "Minecraft"},
+                {value = "888", label = "Monster Hunter"},
+                {value = "769", label = "Naruto"},
+                {value = "844", label = "Nasuverse"},
+                {value = "767", label = "One Piece"},
+                {value = "837", label = "One Punch Man"},
+                {value = "826", label = "Overlord"},
+                {value = "863", label = "Pirates of Caribbean"},
+                {value = "771", label = "Pokemon"},
+                {value = "858", label = "Project Moon"},
+                {value = "861", label = "Qing Transmigration"},
+                {value = "856", label = "Resident Evil"},
+                {value = "820", label = "Siheyuan"},
+                {value = "870", label = "Slay the Gods"},
+                {value = "817", label = "Star Wars"},
+                {value = "866", label = "Strike the Blood"},
+                {value = "785", label = "Swallowed Star"},
+                {value = "836", label = "The Boys"},
+                {value = "869", label = "The Eminence in Shadow"},
+                {value = "852", label = "The Walking Dead"},
+                {value = "850", label = "Toaru"},
+                {value = "857", label = "Touhou Project"},
+                {value = "838", label = "Ultraman"},
+                {value = "834", label = "Uma Musume"},
+                {value = "845", label = "Versatile Mage"},
+                {value = "743", label = "Vocaloid"},
+                {value = "775", label = "Warhammer"},
+                {value = "819", label = "Witcher"},
+                {value = "774", label = "Yu-Gi-Oh!"},
                 {value = "867", label = "Zenless Zone Zero"},
             }
         },
-
+        -- cat 11: Miscellaneous Narrative Elements (40 tags)
         {
-            type = "tristate",
-            key = "tags_misc",
-            label = "Miscellaneous Narrative Elements (40)",
+            type = "select",
+            key = "tag_pick_11",
+            label = "Tags: Miscellaneous Narrative Elements (40)",
+            defaultValue = "",
             options = {
-                {value = "39", label = "Animal Characteristics"}, {value = "40", label = "Animal Rearing"}, {value = "45", label = "Apartment Life"},
-                {value = "57", label = "Artifact Crafting"}, {value = "58", label = "Artifacts"}, {value = "96", label = "Body-double"},
-                {value = "98", label = "Books"}, {value = "106", label = "Buddhism"}, {value = "113", label = "Card Games"},
-                {value = "126", label = "Childcare"}, {value = "139", label = "Co-Workers"}, {value = "140", label = "Cohabitation"},
-                {value = "144", label = "College/University"}, {value = "154", label = "Cooking"}, {value = "174", label = "Cute Children"},
-                {value = "841", label = "Daily Intelligence"}, {value = "180", label = "Daoism"}, {value = "202", label = "Disfigurement"},
-                {value = "209", label = "Dolls/Puppets"}, {value = "210", label = "Domestic Affairs"}, {value = "217", label = "Dreams"},
-                {value = "227", label = "Easy Going Life"}, {value = "277", label = "Feng Shui"}, {value = "283", label = "Folklore"},
-                {value = "340", label = "Heterochromia"}, {value = "821", label = "Hong Kong"}, {value = "372", label = "Jack of All Trades"},
-                {value = "384", label = "Language Barrier"}, {value = "393", label = "Living Abroad"}, {value = "394", label = "Living Alone"},
-                {value = "440", label = "Misandry"}, {value = "473", label = "Mythology"}, {value = "501", label = "Otaku"},
-                {value = "520", label = "Pets"}, {value = "593", label = "Roommates"}, {value = "647", label = "Sign Language"},
-                {value = "657", label = "Sleeping"}, {value = "729", label = "Ugly to Beautiful"}, {value = "734", label = "Unique Weapons"},
+                {value = "", label = "Any"},
+                {value = "39", label = "Animal Characteristics"},
+                {value = "40", label = "Animal Rearing"},
+                {value = "45", label = "Apartment Life"},
+                {value = "57", label = "Artifact Crafting"},
+                {value = "58", label = "Artifacts"},
+                {value = "96", label = "Body-double"},
+                {value = "98", label = "Books"},
+                {value = "106", label = "Buddhism"},
+                {value = "113", label = "Card Games"},
+                {value = "126", label = "Childcare"},
+                {value = "139", label = "Co-Workers"},
+                {value = "140", label = "Cohabitation"},
+                {value = "144", label = "College/University"},
+                {value = "154", label = "Cooking"},
+                {value = "174", label = "Cute Children"},
+                {value = "841", label = "Daily Intelligence"},
+                {value = "180", label = "Daoism"},
+                {value = "202", label = "Disfigurement"},
+                {value = "209", label = "Dolls/Puppets"},
+                {value = "210", label = "Domestic Affairs"},
+                {value = "217", label = "Dreams"},
+                {value = "227", label = "Easy Going Life"},
+                {value = "277", label = "Feng Shui"},
+                {value = "283", label = "Folklore"},
+                {value = "340", label = "Heterochromia"},
+                {value = "821", label = "Hong Kong"},
+                {value = "372", label = "Jack of All Trades"},
+                {value = "384", label = "Language Barrier"},
+                {value = "393", label = "Living Abroad"},
+                {value = "394", label = "Living Alone"},
+                {value = "440", label = "Misandry"},
+                {value = "473", label = "Mythology"},
+                {value = "501", label = "Otaku"},
+                {value = "520", label = "Pets"},
+                {value = "593", label = "Roommates"},
+                {value = "647", label = "Sign Language"},
+                {value = "657", label = "Sleeping"},
+                {value = "729", label = "Ugly to Beautiful"},
+                {value = "734", label = "Unique Weapons"},
                 {value = "788", label = "Western Names"},
             }
-        }
+        },
+        -- [TAG PICKERS END]
     }
 end
 
@@ -2690,40 +3676,65 @@ function getCatalogFiltered(index, filters)
     local count_characters = filters["count_characters"] or ""
     local genre_op = filters["genre_operator"] or "and"
     local tag_op = filters["tag_operator"] or "and"
+    local title_search = filters["title_search"] or ""
+    local tag_cat = filters["tag_category"] or "0"
 
     local genres_inc = filters["genres_included"] or {}
     local genres_exc = filters["genres_excluded"] or {}
 
-    -- Tags are split across 11 category-grouped tristate filters (matches
-    -- the site's own finder grouping; NoveLA renders every tristate option
-    -- as an eagerly-built chip, so a single 882-item list would be unusable).
-    -- Collect included/excluded tag ids from every group into one combined
-    -- ti=/te= list. The single tc= operator applies to the combined set.
-    local tags_inc, tags_exc = {}, {}
-    for _, gkey in ipairs({
-        "tags_protagonist", "tags_power_systems", "tags_worldbuilding",
-        "tags_socio_political", "tags_relationships", "tags_narrative",
-        "tags_beings_factions", "tags_professional", "tags_tone",
-        "tags_adaptations", "tags_misc"
-    }) do
-        for _, v in ipairs(filters[gkey .. "_included"] or {}) do
-            tags_inc[#tags_inc + 1] = v
+    -- ── Tags: keywords + category scope + dropdown picks (v1.1.9) ───────
+    -- The tag_search_inc / tag_search_exc keyword fields resolve through
+    -- tagSearchResolve, scoped to the tag_category picker. The resolver
+    -- RAISES with a descriptive message on typos / unknown ids / ambiguous
+    -- keywords (the message lists the matching tag names — the closest the
+    -- app's static filter sheet can get to the site's autocomplete).
+    -- The 11 tag_pick_N dropdowns contribute one picked tag id each; they
+    -- merge with the keyword-resolved ids into one deduplicated ti= list.
+    local incText = filters["tag_search_inc"] or ""
+    local excText = filters["tag_search_exc"] or ""
+
+    local function resolveTagField(text, fieldName)
+        if text == nil or text == "" then return {} end
+        local ok, res = pcall(tagSearchResolve, text, tag_cat)
+        if not ok then
+            error("Tag Search (" .. fieldName .. "): " .. tostring(res))
         end
-        for _, v in ipairs(filters[gkey .. "_excluded"] or {}) do
-            tags_exc[#tags_exc + 1] = v
+        return res
+    end
+
+    local tags_inc = resolveTagField(incText, "include")
+    local tags_exc = resolveTagField(excText, "exclude")
+
+    -- Dropdown-picked tags (include side). A stale sheet from an older
+    -- plugin version could carry junk values — validate each id against
+    -- the index and skip anything unknown.
+    local pickedSeen = {}
+    for _, id in ipairs(tags_inc) do pickedSeen[id] = true end
+    for i = 1, 11 do
+        local picked = tostring(filters["tag_pick_" .. i] or "")
+        if picked ~= "" then
+            local valid = false
+            for _, t in ipairs(ALL_TAGS) do
+                if t.id == picked then
+                    valid = true
+                    break
+                end
+            end
+            if valid and not pickedSeen[picked] then
+                pickedSeen[picked] = true
+                tags_inc[#tags_inc + 1] = picked
+            end
         end
     end
 
-    -- Tag Search: resolve free-text tokens to tag IDs and merge
-    for _, id in ipairs(tagSearchResolve(filters["tag_search_inc"]) or {}) do
-        tags_inc[#tags_inc + 1] = id
-    end
-    for _, id in ipairs(tagSearchResolve(filters["tag_search_exc"]) or {}) do
-        tags_exc[#tags_exc + 1] = id
-    end
     local params = "orderBy=" .. orderBy .. "&order=" .. order .. "&status=" .. status ..
         "&release_status=" .. release_status .. "&addition_age=" .. addition_age ..
         "&page=" .. tostring(page)
+
+    -- Title search (the novel-finder text box, now inside the filters)
+    if title_search ~= "" then
+        params = params .. "&text=" .. url_encode(title_search)
+    end
 
     -- Rating filters
     if min_rating ~= "" then
@@ -2762,7 +3773,7 @@ function getCatalogFiltered(index, filters)
         params = params .. "&te=" .. table.concat(tags_exc, ",")
     end
 
-    local pp = fetchNextData("/en/novel-finder.json", params)
+    local pp = fetchCatalogPage("en/novel-finder", "/en/novel-finder.json", params)
     if not pp then
         log_error("wtrlab: getCatalogFiltered failed")
         return { items = {}, hasNext = false }
