@@ -1,6 +1,12 @@
 language: "zh"
 name: "Chinese"
 sources:
+  - id: "69shubaTw"
+    name: "69書吧 (69shuba.tw)"
+    version: "1.2.0"
+    url: "https://raw.githubusercontent.com/Pcraft12/external-sources/refs/heads/main/zh/69shubatw.lua"
+    icon: "https://raw.githubusercontent.com/Pcraft12/external-sources/refs/heads/main/icons/69shuba.png"
+    language: "zh"
   - id: "biquge_company"
     name: "BiqugeCompany"
     version: "1.0.2"
